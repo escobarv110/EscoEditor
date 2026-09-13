@@ -1,0 +1,38 @@
+// FiveM ASI build declarations.
+//
+// FiveM refuses any plugin that does not carry an FX_ASI_BUILD resource whose
+// TYPE id equals the running game build (asi-five: FindResource(h,
+// L"FX_ASI_BUILD", MAKEINTRESOURCE(build)), enforced from build 2189 on).
+//
+// The first sixteen ids are exactly the ones in the user's fx_asi_build_esco.res
+// (kept beside this file for reference). That .res could not be linked as-is:
+// its entries carry zero-length data and cvtres drops them silently, which
+// produced a plugin FiveM would have refused. Compiling the same list from
+// this .rc gives each entry one byte of data and it survives the link.
+//
+// The rest are the other builds FiveM offers, so the plugin keeps loading after
+// a server moves. There is no per-build code in it: the free-camera metadata is
+// found by content and the two globals it reads are pattern-scanned at runtime.
+FX_ASI_BUILD 1604 BEGIN "\0" END
+FX_ASI_BUILD 2060 BEGIN "\0" END
+FX_ASI_BUILD 2189 BEGIN "\0" END
+FX_ASI_BUILD 2372 BEGIN "\0" END
+FX_ASI_BUILD 2545 BEGIN "\0" END
+FX_ASI_BUILD 2612 BEGIN "\0" END
+FX_ASI_BUILD 2628 BEGIN "\0" END
+FX_ASI_BUILD 2699 BEGIN "\0" END
+FX_ASI_BUILD 2802 BEGIN "\0" END
+FX_ASI_BUILD 2944 BEGIN "\0" END
+FX_ASI_BUILD 3095 BEGIN "\0" END
+FX_ASI_BUILD 3258 BEGIN "\0" END
+FX_ASI_BUILD 3323 BEGIN "\0" END
+FX_ASI_BUILD 3407 BEGIN "\0" END
+FX_ASI_BUILD 3442 BEGIN "\0" END
+FX_ASI_BUILD 3504 BEGIN "\0" END
+FX_ASI_BUILD 3521 BEGIN "\0" END
+FX_ASI_BUILD 3570 BEGIN "\0" END
+FX_ASI_BUILD 3586 BEGIN "\0" END
+FX_ASI_BUILD 3717 BEGIN "\0" END
+FX_ASI_BUILD 3751 BEGIN "\0" END
+FX_ASI_BUILD 3788 BEGIN "\0" END
+FX_ASI_BUILD 3889 BEGIN "\0" END

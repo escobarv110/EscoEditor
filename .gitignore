@@ -1,0 +1,22 @@
+# Build output. build.bat recreates all of it; dist\ is the release and IS tracked.
+build/*.obj
+build/*.res
+build/*.map
+build/*.asi
+build/selftest/*.obj
+build/selftest/*.exe
+build/selftest/*.pdb
+*.ilk
+*.pdb
+*.exp
+*.lib
+
+# Local packaging
+EscoEditor.zip
+*.log
+
+# Stale backups and tool build output
+*.bak
+*.res
+tools/**/*.obj
+tools/**/*.asi
