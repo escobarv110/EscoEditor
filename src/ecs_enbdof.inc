@@ -1009,6 +1009,14 @@ namespace enbdof
 
 	ULONGLONG s_nextVerify = 0;
 	int s_resetLogs = 0;
+	bool s_focusHeld = false;               // this frame's Auto / Player focus is the last one held
+	// While a clip plays or exports with the ENB option on: a line every three
+	// seconds of what went to ENB and from where, and whether ENB and the
+	// replay director are ticking - how an export that looks wrong is read back.
+	volatile LONG s_enbFrames = 0, s_gameFrames = 0;
+	LONG      s_lastEnbFrames = 0, s_lastGameFrames = 0;
+	ULONGLONG s_nextStatus = 0;
+	int       s_statusLogs = 0;
 	bool s_techPush = true;                  // ENB takes TECHNIQUE (the nudge to its Manual technique)
 
 	void push()
@@ -1046,6 +1054,7 @@ namespace enbdof
 		const bool autoF = fm == FM_AUTO || fm == FM_PLAYER;
 		float autoD = 0.0f;
 		const bool byPlayer = fm == FM_PLAYER && playerFresh();
+		s_focusHeld = false;
 		if (byPlayer || (autoF && centreFresh()))
 		{
 			const float target = byPlayer ? enbDistance(clampf(s_playerMetres, 0.3f, 200.0f), n) : distanceForRaw(s_centreRaw);
@@ -1068,6 +1077,15 @@ namespace enbdof
 			s_autoD = s_autoD > 0.0f ? s_autoD + (target - s_autoD) * k : target;
 			autoD = s_autoD;
 			if (s_autoLogs < 3 && !byPlayer) { ++s_autoLogs; logf("enb: Auto focus - the middle of the picture is at depth %.5f, about %.1f m: NVE's Distance %.2f", s_centreRaw, centreMetres(), target); }
+		}
+		else if (autoF && s_autoD > 0.0f && GetTickCount64() - s_autoAt < 120000)
+		{
+			// Nothing measured this frame - an export need not run the director
+			// tick (the player) or ReShade's pass (the middle of the picture). The
+			// focus stays where it last was rather than jumping to the keyframe's
+			// Focus Distance, which for Auto and Player nobody set.
+			autoD = s_autoD;
+			s_focusHeld = true;
 		}
 		else if (autoF && s_autoLogs < 3 && GetTickCount64() > 60000)
 		{
@@ -1118,6 +1136,23 @@ namespace enbdof
 			}
 			else if (s_setFails++ < 3) logf("enb: ENB would not take \"%s\"", kDefs[i].ui);
 		}
+
+		const int mode = replayMode();
+		const ULONGLONG nowS = GetTickCount64();
+		if (mode > 0 && mode != 2 && s_statusLogs < 60 && nowS >= s_nextStatus)
+		{
+			s_nextStatus = nowS + 3000;
+			++s_statusLogs;
+			const LONG ef = s_enbFrames, gf = s_gameFrames;
+			const float sentD = autoD > 0.0f ? autoD : enbDistance(clampf(w.v[I_DIST], 0.3f, 200.0f), n);
+			logf("enb: playing (mode %d) at %.2f s - ENB drew %ld frame(s) in 3 s, the replay director ticked %ld; focus %s at %.1f m (%s); blur %.0f%%%s",
+				mode, game::replayTimeMs() * 0.001f, ef - s_lastEnbFrames, gf - s_lastGameFrames,
+				fm == FM_AUTO ? "Auto" : fm == FM_PLAYER ? "Player" : "Manual", metresOf(sentD, n),
+				byPlayer ? "the player" : autoD > 0.0f && !s_focusHeld ? "measured" : s_focusHeld ? "held - nothing measured" : "the keyframe's distance",
+				pctManual(apEff), w.v[I_ENABLED] < 0.5f ? " - Keyframe DOF off" : "");
+			s_lastEnbFrames = ef;
+			s_lastGameFrames = gf;
+		}
 	}
 
 	// ENB's callback. The numbering is the SDK's (1 end of frame, 2 start of
@@ -1127,7 +1162,16 @@ namespace enbdof
 	{
 		InterlockedExchange64(&s_lastCb, (LONGLONG)GetTickCount64());
 		if (s_cbLogs < 6) { ++s_cbLogs; logf("enb: callback %d", type); }
+		if (type == 1) InterlockedIncrement(&s_enbFrames);
 		if (type == 1 || type == 2) { push(); return; }
+		if (type == 5 || type == 8)
+		{
+			// ENB (re)started or reset its device - its shader can come back with
+			// the ini's values: everything goes in again
+			for (int i = 0; i < N; ++i) s_havePushed[i] = false;
+			if (s_resetLogs < 6) { ++s_resetLogs; logf("enb: ENB %s - every value is sent again", type == 5 ? "started" : "reset its device"); }
+			return;
+		}
 		if (type == 3 && !s_saveIsNoise)
 		{
 			// "ENB is about to save": put its own values back first, so what it
@@ -1147,6 +1191,7 @@ namespace enbdof
 	void fromGame()
 	{
 		if (!s_ready) return;
+		InterlockedIncrement(&s_gameFrames);
 		Want w;
 		compute(w);
 		if (g_cfg.enbDof) trackPlayer(w.v);

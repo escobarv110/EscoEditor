@@ -1,4 +1,4 @@
-EscoEditor.asi 4.20  -  more control for the Rockstar Editor
+EscoEditor.asi 4.21  -  more control for the Rockstar Editor
 ======================================================================
 (formerly EditorCamSpeed.asi - same plugin, new name)
 
@@ -9,6 +9,24 @@ menu, adds scene lights you place in the picture with a 3D gizmo - fixed in
 the world, on the camera, or riding along with a ped, a vehicle or a prop -
 and keeps the free camera speed keys. The editor's own camera path,
 transitions, shake and depth of field are never touched.
+
+WHAT CHANGED IN 4.21
+  - ENB settings belong to each clip. With Lights In Every Clip on, a clip's
+    whole set was copied to every other clip of the project - on every save -
+    and the ENB keyframe values rode along, so one clip's depth of field
+    landed on all of them. Lights (and time & weather) are still shared; ENB
+    stays with its clip.
+  - Exports: Auto and Player focus keep the last focus they measured when an
+    export gives them nothing new (an export need not run the replay
+    director's tick, which Player needs, or ReShade's pass, which Auto
+    needs). Before, they fell back to the keyframe's Focus Distance - often
+    far behind everything, so no blur showed.
+  - ENB starting up again or resetting its device (callbacks 5 and 8) sends
+    every value again.
+  - While a clip plays or exports with ENB on, EscoEditor.log gets a line
+    every three seconds: whether ENB and the replay director are drawing,
+    where the focus is and where it came from, and how much blur - so an
+    export that looks wrong can be read back.
 
 WHAT CHANGED IN 4.20
   - Keyframe DOF: On / Off - ENB's blur for one keyframe. Off takes the blur
@@ -598,7 +616,7 @@ WHAT CHANGED IN 2.9
 
 CHECK YOU HAVE THIS VERSION
   The first line of EscoEditor.log (next to the .asi) must say
-  "EscoEditor 4.20".
+  "EscoEditor 4.21".
 
 INSTALL
   FiveM:          close FiveM, run Install.bat - or copy EscoEditor.asi

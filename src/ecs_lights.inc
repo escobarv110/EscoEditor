@@ -825,9 +825,15 @@ namespace lights
 	// A whole clip's worth of lights onto another clip. The three fields the
 	// game thread fills in (what the light was found on, and where that was)
 	// do not travel: the other clip resolves its own.
+	// "Same lights in every clip" copies a clip's lights (and its time &
+	// weather keys) into the project's other clips - but not its ENB keys. Those
+	// are each clip's own (4.21): they used to ride along, so one clip's depth
+	// of field landed on every clip of the project.
 	void copySet(LightSet& dst, const LightSet& src)
 	{
+		const EnbTrack keep = dst.enb;
 		dst = src;
+		dst.enb = keep;
 		for (int i = 0; i < dst.count; ++i)
 		{
 			dst.l[i].ent = nullptr;

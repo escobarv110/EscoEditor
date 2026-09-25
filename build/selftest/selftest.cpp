@@ -1061,6 +1061,38 @@ int main(int argc, char** argv)
         CHECK(ed::nearestToCentre(cam, fwd, none, 1, &z) == -1, "and nobody when everyone is behind the camera");
     }
 
+    // ---- Lights In Every Clip shares the lights, not the ENB keys (4.21) ---------------
+    {
+        namespace lt = lights;
+        lt::Lock lk;
+        lt::clearStore();
+        lt::LightSet* a = lt::findSet("SyncProj", 1, true);
+        lt::LightSet* b = lt::findSet("SyncProj", 2, true);
+        lt::addLight(*a, lt::T_POINT, nullptr);
+        lt::addLight(*a, lt::T_SPOT, nullptr);
+        float sd[enbdof::N] = {};
+        lt::setEnbParam(a->enb, 100.0f, 11, 5.0f, sd);
+        lt::setEnbParam(b->enb, 200.0f, 11, 9.0f, sd);
+        const bool wasAll = g_cfg.lightsAll;
+        lt::LightSet* wasCur = lt::g_cur;
+        char wasProject[128];
+        strcpy_s(wasProject, lt::g_curProject);
+        g_cfg.lightsAll = true;
+        lt::g_cur = a;
+        strcpy_s(lt::g_curProject, "SyncProj");
+        const int n = lt::syncAllClips();
+        CHECK(n == 1 && b->count == 2 && b->enb.n == 1 && b->enb.k[0].t == 200.0f && b->enb.k[0].v[11] == 9.0f && a->enb.k[0].v[11] == 5.0f,
+              "Lights In Every Clip: clip 2 gets clip 1's lights and keeps its own ENB keys (%d lights, ENB key at %.0f ms = %.1f)",
+              b->count, b->enb.n ? b->enb.k[0].t : -1.0f, b->enb.n ? b->enb.k[0].v[11] : -1.0f);
+        lt::LightSet* c = lt::findSet("SyncProj", 3, true);
+        CHECK(lt::seedFromSiblings(c, "SyncProj") && c->count == 2 && c->enb.n == 0,
+              "and a clip opened for the first time gets the project's lights, but no other clip's ENB keys");
+        g_cfg.lightsAll = wasAll;
+        lt::g_cur = wasCur;
+        strcpy_s(lt::g_curProject, wasProject);
+        lt::clearStore();
+    }
+
     // ---- a light that flashes ------------------------------------------------------
     {
         namespace lt = lights;
