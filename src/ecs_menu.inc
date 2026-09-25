@@ -266,7 +266,15 @@ namespace menu
 				const int p = enbParam(r);
 				if (p < 0) return "";
 				bool own;
-				return enbdof::format(p, enbdof::valueHere(p, &own), buf, cap);
+				const char* f = enbdof::format(p, enbdof::valueHere(p, &own), buf, cap);
+				if ((p == 12 || p == 14) && !own)          // following the Aperture
+				{
+					char t[48];
+					snprintf(t, sizeof(t), "Auto (%s)", f);
+					strcpy_s(buf, cap, t);
+					return buf;
+				}
+				return f;
 			}
 			return "";
 		}

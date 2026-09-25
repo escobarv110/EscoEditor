@@ -624,7 +624,7 @@ namespace enbdof
 	// What ENB should hold, computed on the game thread and published; pushed
 	// from ENB's thread. A snapshot older than a second is not trusted - an
 	// export does not tick the replay director - and the push computes afresh.
-	struct Want { float v[N]; ULONGLONG at; bool on; };
+	struct Want { float v[N]; ULONGLONG at; bool on; uint32_t filled; };   // filled: options the keyframes set themselves
 	Want s_want = {};
 	volatile LONG s_wantSeq = 0;
 
@@ -697,6 +697,7 @@ namespace enbdof
 			lights::Lock lk;
 			if (lights::g_cur && lights::g_cur->enb.n > 0) filled = evalByMarker(lights::g_cur->enb, t, w.v);
 		}
+		w.filled = filled;
 		if (g_cfg.enbFollow)
 		{
 			EdDof a, b;
@@ -766,8 +767,9 @@ namespace enbdof
 			// Maximum size and Blur size are the Aperture's (4.15).
 			const float out = i == I_FOCUS ? (float)TECH_MANUAL
 							: i == I_MOUSE ? 0.0f
-							: i == 14 ? sizeMax
-							: i == 12 ? sizeBlur
+							: i == 14 && !(w.filled & (1u << 14)) ? sizeMax      // Auto: follows the Aperture
+							: i == 12 && !(w.filled & (1u << 12)) ? sizeBlur
+							: i == I_APERTURE ? clampf(w.v[i], 0.0f, kApertureFull) // an old key's 1.38 is 100%, not a paper-thin focus
 							: i == I_DIST ? (autoD > 0.0f ? autoD : enbDistance(w.v[i], n))   // metres -> NVE's Distance
 							: w.v[i];
 			if (s_havePushed[i] && same(i, s_pushed[i], out)) continue;
@@ -860,14 +862,20 @@ namespace enbdof
 		add(I_FOCUS);
 		if (!autoF) add(I_DIST);
 		if (s_known[I_APERTURE]) add(V_APERTURE);
-		if (s_known[I_NEAR]) add(V_NEAR);
-		add(11);                                          // Blur : Chromatic Spread (the sizes follow Aperture)
+		add(12);                                          // Blur : Size         - Auto follows the Aperture
+		add(14);                                          // DOF : Maximum size  - Auto follows the Aperture
+		add(I_NEAR);                                      // Near Field Blur: On / Off
+		{
+			bool o;
+			if (s_known[I_NEARPOWER] && valueHere(I_NEAR, &o) > 0.5f) add(V_NEAR);   // and how much, while it is on
+		}
+		add(11);                                          // Blur : Chromatic Spread
 		if (s_known[17] && s_known[18]) add(V_ANAMORPHIC);
 	}
 	int listCount() { return s_listN; }
 	int listParam(int k) { return (k >= 0 && k < s_listN) ? s_list[k] : -1; }
 	// Changing these adds or removes rows.
-	bool reshapes(int p) { return p == I_FOCUS; }
+	bool reshapes(int p) { return p == I_FOCUS || p == I_NEAR; }
 
 	const char* menuLabel(int p)
 	{
@@ -875,7 +883,7 @@ namespace enbdof
 		{
 		case I_FOCUS:           return "Focus Mode";
 		case V_APERTURE:        return "Aperture";
-		case V_NEAR:            return "Near Field Blur";
+		case V_NEAR:            return "Near Field Amount";
 		case V_ANAMORPHIC:      return "Anamorphic";
 		case I_DIST:            return "Focus Distance";
 		case I_APERTURE:
@@ -923,12 +931,8 @@ namespace enbdof
 			r = a ? pctAuto(valueHere(I_AUTO_APERTURE, &o1)) : pctManual(valueHere(I_APERTURE, &o1));
 			break;
 		case V_NEAR:
-		{
-			const float on = valueHere(I_NEAR, &o1);
-			const float pw = valueHere(a ? I_AUTO_NEARPOWER : I_NEARPOWER, &o2);
-			r = on > 0.5f ? nearPct(pw) : -1.0f;
+			r = nearPct(valueHere(a ? I_AUTO_NEARPOWER : I_NEARPOWER, &o1));
 			break;
-		}
 		case V_ANAMORPHIC:
 		{
 			const float on = valueHere(17, &o1);
@@ -947,7 +951,14 @@ namespace enbdof
 		*own = false;
 		if (isVirtual(p)) return virtualHere(p, own);
 		float t;
-		if (p < 0 || p >= N || !markerTimeNow(&t)) return p >= 0 && p < N ? s_manual[p] : 0.0f;
+		if (p < 0 || p >= N) return 0.0f;
+		if (!markerTimeNow(&t))
+		{
+			if (p != 12 && p != 14) return s_manual[p];
+			float mx, bs;                            // no keyframe open: the sizes the session's Aperture gives
+			blurSizesFor(clampf(s_manual[I_APERTURE], 0.0f, kApertureFull), &mx, &bs);
+			return p == 14 ? mx : bs;
+		}
 		{
 			lights::Lock lk;
 			float v;
@@ -955,6 +966,12 @@ namespace enbdof
 		}
 		Want w;
 		computeAt(t, w);
+		if ((p == 12 || p == 14) && !(w.filled & (1u << p)))
+		{
+			float mx, bs;
+			blurSizesFor(clampf(w.v[I_APERTURE], 0.0f, kApertureFull), &mx, &bs);
+			return p == 14 ? mx : bs;
+		}
 		return w.v[p];
 	}
 
@@ -1003,18 +1020,8 @@ namespace enbdof
 			break;
 		}
 		case V_NEAR:
-		{
-			if (cur < 0.0f)                                   // Off
-			{
-				if (delta > 0) { put(I_NEAR, 1.0f); put(a ? I_AUTO_NEARPOWER : I_NEARPOWER, powerFromPct(10.0f)); }
-				break;
-			}
-			const float pc = cur + 5.0f * (float)delta;
-			if (pc < 1.0f) { put(I_NEAR, 0.0f); break; }
-			put(I_NEAR, 1.0f);
-			put(a ? I_AUTO_NEARPOWER : I_NEARPOWER, powerFromPct(pc > 100.0f ? 100.0f : pc));
+			put(a ? I_AUTO_NEARPOWER : I_NEARPOWER, powerFromPct(clampf(floorf(cur + 0.5f) + 5.0f * (float)delta, 1.0f, 100.0f)));
 			break;
-		}
 		case V_ANAMORPHIC:
 		{
 			if (cur <= 0.0f)                                  // Off
@@ -1057,7 +1064,7 @@ namespace enbdof
 		switch (p)
 		{
 		case V_APERTURE:   clr(I_APERTURE); clr(I_AUTO_APERTURE); break;
-		case V_NEAR:       clr(I_NEAR); clr(I_NEARPOWER); clr(I_AUTO_NEARPOWER); break;
+		case V_NEAR:       clr(I_NEARPOWER); clr(I_AUTO_NEARPOWER); break;
 		case V_ANAMORPHIC: clr(17); clr(18); break;
 		default:           if (p >= 0 && p < N) clr(p); else return; break;
 		}
@@ -1144,7 +1151,7 @@ namespace enbdof
 	const char* format(int p, float v, char* buf, int cap)
 	{
 		if (p == V_APERTURE) { snprintf(buf, cap, "%.0f%%", v); return buf; }
-		if (p == V_NEAR) { if (v < 0.0f) return "Off"; snprintf(buf, cap, "%.0f%%", v); return buf; }
+		if (p == V_NEAR) { snprintf(buf, cap, "%.0f%%", v); return buf; }
 		if (p == V_ANAMORPHIC) { if (v <= 0.0f) return "Off"; snprintf(buf, cap, "%.2fx", v); return buf; }
 		if (p < 0 || p >= N) return "";
 		const Def& d = kDefs[p];
@@ -1170,7 +1177,7 @@ namespace enbdof
 		{
 		case I_FOCUS:           return "Auto: the focus follows what is in the middle of the picture, as the clip plays. Manual: at Focus Distance.";
 		case V_APERTURE:        return "How much blur: 0% none at all, 100% the most. Hold left/right to go faster.";
-		case V_NEAR:            return "Blur in front of the focus too: Off, or how much of the blur behind it.";
+		case V_NEAR:            return "How much blur in front of the focus, next to the blur behind it: 100% the same.";
 		case V_ANAMORPHIC:      return "Oval bokeh, like an anamorphic lens: Off, or how stretched.";
 		case I_DIST:            return centreFresh() ? "Where the picture is sharp, in metres. Enter: focus on what is in the middle of the picture." : "Where the picture is sharp, in metres from the camera.";
 		case I_APERTURE:        return "How fast the blur comes in past the focus. Small numbers: gentle.";
@@ -1183,9 +1190,9 @@ namespace enbdof
 		case 9:  return "Where the auto-focus looks, left to right.";
 		case 10: return "Where the auto-focus looks, top to bottom.";
 		case 11: return "Colour fringes at the edges of the blur. They grow with the blur, so they show more at a higher Aperture.";
-		case 12: return "How big the blur is.";
+		case 12: return "A soft blur over the bokeh. Auto follows Aperture; left/right gives this keyframe its own, Enter goes back to Auto.";
 		case 13: return "More steps, smoother blur, slower.";
-		case 14: return "The largest the blur can get.";
+		case 14: return "The largest the blur can get. Auto follows Aperture; left/right gives this keyframe its own, Enter goes back to Auto.";
 		case 15: return "Bokeh quality.";
 		case 16: return "Lower renders the blur at less resolution - faster.";
 		case 17: return "Oval bokeh, like an anamorphic lens.";

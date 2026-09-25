@@ -1,0 +1,4 @@
+// EscoFlare.fx inside the plugin: written into ReShade's shader folder
+// whenever the copy there differs (4.17), so updating only the .asi never
+// leaves an old EscoFlare.fx behind.
+ESCOFLARE RCDATA "dist/EscoFlare.fx"

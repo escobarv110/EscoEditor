@@ -19,6 +19,11 @@ if not exist "%HERE%build" mkdir "%HERE%build"
 echo [1/4] Resources (every FiveM game build id, see fx_asi_build_all.rc)...
 rc /nologo /fo "%HERE%build\fx_asi_build_all.res" "%HERE%fx_asi_build_all.rc"
 if errorlevel 1 exit /b 1
+pushd "%HERE%"
+rc /nologo /fo "%HERE%build\escoflare.res" "%HERE%escoflare.rc"
+set "RCERR=%errorlevel%"
+popd
+if not "%RCERR%"=="0" exit /b 1
 
 echo [2/4] Compiling the plugin...
 cl /nologo /O2 /MT /W4 /EHsc /std:c++17 /DNDEBUG /Fo"%HERE%build\\" /c "%HERE%src\main.cpp"
@@ -29,7 +34,7 @@ cl /nologo /O2 /MT /W3 /DNDEBUG /Fo"%HERE%build\\" /c "%HERE%src\minhook\src\buf
 if errorlevel 1 exit /b 1
 
 echo [4/4] Linking...
-link /nologo /DLL /MAP:"%HERE%build\EscoEditor.map" /OUT:"%HERE%build\EscoEditor.asi" "%HERE%build\main.obj" "%HERE%build\buffer.obj" "%HERE%build\hook.obj" "%HERE%build\trampoline.obj" "%HERE%build\hde64.obj" "%HERE%build\fx_asi_build_all.res" kernel32.lib user32.lib
+link /nologo /DLL /MAP:"%HERE%build\EscoEditor.map" /OUT:"%HERE%build\EscoEditor.asi" "%HERE%build\main.obj" "%HERE%build\buffer.obj" "%HERE%build\hook.obj" "%HERE%build\trampoline.obj" "%HERE%build\hde64.obj" "%HERE%build\fx_asi_build_all.res" "%HERE%build\escoflare.res" kernel32.lib user32.lib
 if errorlevel 1 exit /b 1
 
 if not exist "%HERE%dist" mkdir "%HERE%dist"

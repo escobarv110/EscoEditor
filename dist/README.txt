@@ -1,4 +1,4 @@
-EscoEditor.asi 4.16  -  more control for the Rockstar Editor
+EscoEditor.asi 4.17  -  more control for the Rockstar Editor
 ======================================================================
 (formerly EditorCamSpeed.asi - same plugin, new name)
 
@@ -9,6 +9,22 @@ menu, adds scene lights you place in the picture with a 3D gizmo - fixed in
 the world, on the camera, or riding along with a ped, a vehicle or a prop -
 and keeps the free camera speed keys. The editor's own camera path,
 transitions, shake and depth of field are never touched.
+
+WHAT CHANGED IN 4.17
+  - EscoFlare.fx is built into the plugin and written into ReShade's shader
+    folder whenever the copy there differs. Only the copy next to the .asi
+    used to be compared, so updating just the .asi left the old EscoFlare.fx
+    in place - without 4.14's EscoFocus pass, so Auto focus and Enter on
+    Focus Distance had nothing measured. After this update, press Reload in
+    ReShade once (or restart the game).
+  - Blur Size and Maximum Size are back as rows. They follow the Aperture by
+    themselves ("Auto (11.0)"); left/right gives a keyframe its own, Enter
+    goes back to Auto.
+  - Near Field Blur is On / Off again, with Near Field Amount under it while
+    it is on.
+  - An Aperture left in an old key above 100% (4.13 and earlier wrote NVE's
+    raw numbers, like 1.38) is sent as 100%. Those made the sharp zone so thin
+    that moving Focus Distance hardly showed.
 
 WHAT CHANGED IN 4.16
   - Copy DOF, Paste DOF and DOF To All carry the ENB rows too. They copied
@@ -518,7 +534,7 @@ WHAT CHANGED IN 2.9
 
 CHECK YOU HAVE THIS VERSION
   The first line of EscoEditor.log (next to the .asi) must say
-  "EscoEditor 4.16".
+  "EscoEditor 4.17".
 
 INSTALL
   FiveM:          close FiveM, run Install.bat - or copy EscoEditor.asi

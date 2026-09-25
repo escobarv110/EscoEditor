@@ -188,6 +188,45 @@ namespace rs
 		CreateDirectoryA(path, nullptr);
 	}
 
+	// The EscoFlare.fx built into the plugin (escoflare.rc).
+	bool builtinShader(const char** data, size_t* size)
+	{
+		HRSRC r = FindResourceA(g_self, "ESCOFLARE", MAKEINTRESOURCEA(10));   // RT_RCDATA
+		if (!r) return false;
+		HGLOBAL h = LoadResource(g_self, r);
+		const void* p = h ? LockResource(h) : nullptr;
+		const DWORD n = SizeofResource(g_self, r);
+		if (!p || !n) return false;
+		*data = (const char*)p;
+		*size = n;
+		return true;
+	}
+
+	// Is `path` exactly these bytes?
+	bool fileIs(const char* path, const char* data, size_t size)
+	{
+		char* d; size_t n;
+		if (!readAll(path, &d, &n)) return false;
+		const bool same = n == size && memcmp(d, data, n) == 0;
+		free(d);
+		return same;
+	}
+
+	bool writeAll(const char* path, const char* data, size_t size)
+	{
+		FILE* f = nullptr;
+		if (fopen_s(&f, path, "wb") != 0 || !f) return false;
+		const size_t put = fwrite(data, 1, size, f);
+		fclose(f);
+		return put == size;
+	}
+
+	// EscoFlare.fx into ReShade's shader folder. Since 4.17 the plugin carries
+	// its own copy and writes it whenever the one there differs: 4.14 added a
+	// pass to it, but only the copy next to the .asi was ever compared, so
+	// updating just the .asi left an old EscoFlare.fx in place and ReShade
+	// never had the pass (Auto focus measured nothing). The copy next to the
+	// .asi is refreshed too, so it does not mislead.
 	bool installShader()
 	{
 		char ini[MAX_PATH];
@@ -199,24 +238,26 @@ namespace rs
 		resolveShaderDir(paths, g_reshadeDir, dir, sizeof(dir));
 		snprintf(g_shaderFile, sizeof(g_shaderFile), "%s%s", dir, kEffect);
 
-		char src[MAX_PATH];
-		snprintf(src, sizeof(src), "%s%s", g_dir, kEffect);
-		const bool haveSrc = GetFileAttributesA(src) != INVALID_FILE_ATTRIBUTES;
+		const char* data = nullptr;
+		size_t size = 0;
+		if (!builtinShader(&data, &size))
+		{
+			logf("reshade: this build carries no EscoFlare.fx of its own - no lens flares or Auto focus");
+			return false;
+		}
+		char beside[MAX_PATH];
+		snprintf(beside, sizeof(beside), "%s%s", g_dir, kEffect);
+		if (GetFileAttributesA(beside) != INVALID_FILE_ATTRIBUTES && !fileIs(beside, data, size)) writeAll(beside, data, size);
+
 		const bool haveDst = GetFileAttributesA(g_shaderFile) != INVALID_FILE_ATTRIBUTES;
-		if (!haveSrc)
-		{
-			if (haveDst) { logf("reshade: %s is in %s (no copy next to the .asi to compare with)", kEffect, dir); return true; }
-			logf("reshade: %s is missing next to EscoEditor.asi and not in %s - no lens flares. Copy it there from the zip.", kEffect, dir);
-			return false;
-		}
-		if (haveDst && sameFile(src, g_shaderFile)) { logf("reshade: %s is up to date in %s", kEffect, dir); return true; }
+		if (haveDst && fileIs(g_shaderFile, data, size)) { logf("reshade: %s is up to date in %s", kEffect, dir); return true; }
 		ensureDir(dir);
-		if (!CopyFileA(src, g_shaderFile, FALSE))
+		if (!writeAll(g_shaderFile, data, size))
 		{
-			logf("reshade: could not copy %s to %s (error %lu) - no lens flares", kEffect, dir, GetLastError());
+			logf("reshade: could not write %s to %s (error %lu) - no lens flares or Auto focus", kEffect, dir, GetLastError());
 			return false;
 		}
-		logf("reshade: %s %s in %s", kEffect, haveDst ? "updated" : "installed", dir);
+		logf("reshade: %s %s in %s (the plugin's own copy)", kEffect, haveDst ? "updated" : "installed", dir);
 		return true;
 	}
 

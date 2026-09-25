@@ -695,16 +695,16 @@ int main(int argc, char** argv)
             for (int i = 0; i < ed::N; ++i) ed::s_known[i] = !ed::isLabel(i);
             ed::s_manual[ed::I_FOCUS] = 1.0f; ed::s_manual[ed::I_NEAR] = 1.0f; ed::s_manual[17] = 1.0f;
             ed::buildList();
-            const int wantManual[] = { ed::I_FOCUS, ed::I_DIST, ed::V_APERTURE, ed::V_NEAR, 11, ed::V_ANAMORPHIC };
-            bool listOk = ed::listCount() == 6;
-            for (int k = 0; listOk && k < 6; ++k) if (ed::listParam(k) != wantManual[k]) listOk = false;
-            CHECK(listOk && ed::listParam(6) == -1, "Manual: Focus Mode, Focus Distance, Aperture, Near Field Blur, Chromatic Spread, Anamorphic - no size rows, Aperture is the amount");
+            const int wantManual[] = { ed::I_FOCUS, ed::I_DIST, ed::V_APERTURE, 12, 14, ed::I_NEAR, ed::V_NEAR, 11, ed::V_ANAMORPHIC };
+            bool listOk = ed::listCount() == 9;
+            for (int k = 0; listOk && k < 9; ++k) if (ed::listParam(k) != wantManual[k]) listOk = false;
+            CHECK(listOk && ed::listParam(9) == -1, "Manual: Focus Mode, Focus Distance, Aperture, Blur Size, Maximum Size, Near Field Blur On + its amount, Chromatic Spread, Anamorphic");
             ed::s_manual[ed::I_FOCUS] = 0.0f; ed::s_manual[ed::I_NEAR] = 0.0f; ed::s_manual[17] = 0.0f;
             ed::buildList();
-            const int wantAuto[] = { ed::I_FOCUS, ed::V_APERTURE, ed::V_NEAR, 11, ed::V_ANAMORPHIC };
-            bool autoOk = ed::listCount() == 5;
-            for (int k = 0; autoOk && k < 5; ++k) if (ed::listParam(k) != wantAuto[k]) autoOk = false;
-            CHECK(autoOk, "Auto: the same rows without a distance");
+            const int wantAuto[] = { ed::I_FOCUS, ed::V_APERTURE, 12, 14, ed::I_NEAR, 11, ed::V_ANAMORPHIC };
+            bool autoOk = ed::listCount() == 7;
+            for (int k = 0; autoOk && k < 7; ++k) if (ed::listParam(k) != wantAuto[k]) autoOk = false;
+            CHECK(autoOk, "Auto: the same rows without a distance; Near Field Blur Off hides its amount");
 
             // one Aperture percentage, converted for whichever technique runs
             CHECK(ed::manualFromPct(0.0f) == 0.0f && fabsf(ed::manualFromPct(100.0f) - 0.12f) < 1e-6f && fabsf(ed::manualFromPct(50.0f) - 0.06f) < 1e-6f &&
@@ -725,6 +725,8 @@ int main(int argc, char** argv)
             ed::s_manual[ed::I_AUTO_APERTURE] = 5.0f;
             ed::s_manual[ed::I_APERTURE] = 0.06f;
             bool own;
+            CHECK(fabsf(ed::valueHere(14, &own) - 11.0f) < 1e-4f && fabsf(ed::valueHere(12, &own) - 1.0f) < 1e-4f && !own,
+                  "Blur Size and Maximum Size show what the Aperture gives them (Auto) until a keyframe sets its own");
             CHECK(fabsf(ed::valueHere(ed::V_APERTURE, &own) - 50.0f) < 1e-3f,
                   "the Aperture row reads the Manual technique's aperture - NVE runs Manual, Auto included (4.14)");
 
@@ -752,7 +754,8 @@ int main(int argc, char** argv)
             }
             CHECK(fabsf(ed::powerFromPct(50.0f) - 2.0f) < 1e-6f && fabsf(ed::nearPct(2.0f) - 50.0f) < 1e-4f && ed::nearPct(0.5f) == 100.0f,
                   "Near Field Blur 50%% is a near field power of 2 (the near blur halved)");
-            CHECK(ed::valueHere(ed::V_NEAR, &own) < 0.0f && !strcmp(ed::format(ed::V_NEAR, -1.0f, fb0, 16), "Off") &&
+            ed::s_manual[ed::I_NEARPOWER] = 2.0f;
+            CHECK(fabsf(ed::valueHere(ed::V_NEAR, &own) - 50.0f) < 1e-3f && ed::reshapes(ed::I_NEAR) &&
                   !strcmp(ed::format(ed::V_NEAR, 30.0f, fb0, 16), "30%") && !strcmp(ed::format(ed::V_ANAMORPHIC, 0.0f, fb0, 16), "Off") &&
                   !strcmp(ed::format(ed::V_ANAMORPHIC, 1.5f, fb0, 16), "1.50x") && !strcmp(ed::format(ed::V_APERTURE, 42.0f, fb0, 16), "42%"),
                   "the combined rows read Off or their amount");
