@@ -1,4 +1,4 @@
-EscoEditor.asi 4.9  -  more control for the Rockstar Editor
+EscoEditor.asi 4.10  -  more control for the Rockstar Editor
 ======================================================================
 (formerly EditorCamSpeed.asi - same plugin, new name)
 
@@ -10,8 +10,35 @@ the world, on the camera, or riding along with a ped, a vehicle or a prop -
 and keeps the free camera speed keys. The editor's own camera path,
 transitions, shake and depth of field are never touched.
 
+WHAT CHANGED IN 4.10
+  - ENB: the focus distance is where ENB focuses. NVE's "Manual Focus :
+    Distance" is not in metres - the plane it keeps sharp is about Distance
+    squared times the camera's near clip, so NVE's own 7.0 is about 4.8 m, and
+    a keyframe's 51.6 m sent as it was focused near 270 m. The keyframe's
+    distance is converted now, so 5 m is 5 m.
+  - ENB: the intensity changes something you can see. NVE's aperture is not a
+    blur amount: at its own 0.5, anything a few percent past the focus is
+    already as blurred as it gets, so 1.55 and 2.30 looked the same. A Custom
+    keyframe's Intensity is a percentage now: 100% gives NVE's 0.5, 50% gives
+    0.125, 20% gives 0.02 - low intensity, the blur comes in slowly with
+    distance; high, it comes in right behind the focus. EnbDofStrength in
+    EscoEditor.ini multiplies it (EnbDofScale is retired).
+  - Focus and strength are the game's own rows: set the keyframe's Depth of
+    Field to Custom, and its Focal Distance and Intensity rows drive ENB, with
+    the game's own hold-to-speed-up.
+  - No more "ENB Options" pages: every ENB option the running NVE technique
+    actually reads is its own row under the ENB switch. The column shows 16
+    rows, so the list scrolls - down on the last row brings the next option
+    in. Options NVE's technique never reads are gone from the menu: 4.9's
+    "switches" (the six "-----" lines are only labels - the shader declares
+    them and never reads them; 4.9 was wrong about them) and, with the Manual
+    technique, the Auto-focus options.
+  - Holding left/right (keyboard or controller) on an ENB row or Time of Day
+    speeds up the longer it is held, like the game's own sliders.
+  - The log says which NVE technique ENB runs.
+
 WHAT CHANGED IN 4.9
-  - The ENB option now switches NVE's depth of field ON. Six lines of
+  - (Wrong - see 4.10: the six lines are labels.) The ENB option now switches NVE's depth of field ON. Six lines of
     enbdepthoffield.fx that look like separators in ENB's window - "Manual
     DOF", "Auto-focus DOF", "DOF Near Field settings", "Blur Settings",
     "Quality Settings", "Misc. settings" - are switches, and Manual DOF and
@@ -396,7 +423,7 @@ WHAT CHANGED IN 2.9
 
 CHECK YOU HAVE THIS VERSION
   The first line of EscoEditor.log (next to the .asi) must say
-  "EscoEditor 4.9".
+  "EscoEditor 4.10".
 
 INSTALL
   FiveM:          close FiveM, run Install.bat - or copy EscoEditor.asi

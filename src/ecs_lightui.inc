@@ -901,17 +901,18 @@ namespace lightui
 			iniWriteInt("EnbDofFollow", follow ? 1 : 0);
 		}
 		tip("Each keyframe's own Depth of Field drives ENB, blended from one keyframe to the next:\n"
-			"Custom with manual focus sets the focus distance; its intensity (1 to 10) sets the aperture; None means no blur; Default leaves ENB's values alone.");
+			"Custom: its Focal Distance is where ENB focuses, its Intensity how quickly the blur comes in; None means no blur; Default leaves ENB's focus and aperture alone.");
 		if (g_cfg.enbFollow)
 		{
 			ImGui::SetNextItemWidth(160.0f);
-			if (ImGui::DragFloat("Aperture per intensity step", &g_cfg.enbScale, 0.005f, 0.0f, 5.0f, "%.3f"))
+			if (ImGui::DragFloat("Intensity strength", &g_cfg.enbStrength, 0.01f, 0.0f, 20.0f, "%.2f"))
 			{
 				char b[32];
-				snprintf(b, sizeof(b), "%.4f", g_cfg.enbScale);
-				WritePrivateProfileStringA(kSection, "EnbDofScale", b, g_ini);
+				snprintf(b, sizeof(b), "%.3f", g_cfg.enbStrength);
+				WritePrivateProfileStringA(kSection, "EnbDofStrength", b, g_ini);
 			}
-			tip("The keyframe's intensity times this is ENB's aperture: 0.25 makes intensity 2 an aperture of 0.5 and intensity 10 an aperture of 2.5.");
+			tip("1 = a keyframe at 100%% intensity gets NVE's own aperture (0.5), 50%% gets 0.125, 20%% gets 0.02.\n"
+				"Higher makes every intensity blur sooner behind and in front of the focus.");
 			if (enbdof::s_editorLine[0]) ImGui::TextDisabled("Now: %s", enbdof::s_editorLine);
 		}
 
@@ -921,7 +922,7 @@ namespace lightui
 		for (int i = 0; i < enbdof::N; ++i)
 		{
 			const enbdof::Def& d = enbdof::kDefs[i];
-			if (!enbdof::s_known[i]) continue;
+			if (!enbdof::s_known[i] || enbdof::isLabel(i)) continue;
 			ImGui::PushID(2000 + i);
 			float& v = enbdof::s_manual[i];
 			if (d.kind == enbdof::K_BOOL)
@@ -937,14 +938,13 @@ namespace lightui
 			else
 			{
 				const float speed = (d.hi - d.lo) > 50.0f ? 0.05f : 0.005f;
-				ImGui::DragFloat(d.label, &v, speed, d.lo, d.hi, "%.3f");
+				ImGui::DragFloat(d.label, &v, speed, d.lo, d.hi, "%.3f", (d.hi - d.lo) > 50.0f ? ImGuiSliderFlags_Logarithmic : 0);
 			}
 			if (g_cfg.enbFollow && (i == enbdof::I_DIST || i == enbdof::I_APERTURE || i == enbdof::I_AUTO_APERTURE))
-				tip("Set by the Rockstar Editor keyframe while Follow is on (a Custom keyframe; focus distance only with manual focus).");
+				tip("Set by a Custom Rockstar Editor keyframe while Follow is on: its Focal Distance and Intensity rows.");
 			ImGui::PopID();
 		}
-		if (ImGui::Button("Back to ENB's own values"))
-			for (int i = 0; i < enbdof::N; ++i) enbdof::s_manual[i] = enbdof::s_base[i];
+		if (ImGui::Button("Back to ENB's own values")) enbdof::resetManual();
 		tip("Every option above back to what ENB had before - the values in its enbdepthoffield.fx.ini.");
 
 		// keys over the clip

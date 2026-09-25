@@ -1,4 +1,4 @@
-	constexpr const char* kVersion = "4.9";
+	constexpr const char* kVersion = "4.10";
 
 	// ------------------------------------------------------------------ paths
 	char    g_dir[MAX_PATH]  = {};   // folder of the .asi, trailing backslash
@@ -48,7 +48,7 @@
 		bool  lightsAll = false;  // the lights of one clip are the lights of every clip
 		bool  enbDof = false;     // ENB draws the Rockstar Editor's depth of field
 		bool  enbFollow = true;   // ... following each keyframe's own DOF settings
-		float enbScale = 0.25f;   // aperture per step of the editor's intensity (1..10)
+		float enbStrength = 1.0f; // times the aperture a keyframe's intensity gives (100% = NVE's 0.5)
 	} g_cfg;
 
 	// When the left mouse button was last seen down (worker clock); the menu
@@ -170,7 +170,7 @@
 	void dropRetiredKeys()
 	{
 		static const char* const kRetired[] = {
-			"ClipSpeed", "EscoDOF", "DofAmount", "DofSmooth", "DofNear", "DofQuality", "DofBokeh", "DofAnamorphic",
+			"ClipSpeed", "EnbDofScale", "EscoDOF", "DofAmount", "DofSmooth", "DofNear", "DofQuality", "DofBokeh", "DofAnamorphic",
 			"DofAnamorphicAmount", "DofStretch", "DofChroma", "DofRadial", "DofHighlight", "DofPage", "DofEngine" };
 		for (const char* key : kRetired)
 		{
@@ -214,12 +214,17 @@
 		g_cfg.lightsAll = iniInt("LightsAllClips",  0, 0, 1) != 0;
 		g_cfg.enbDof    = iniInt("EnbDof",          0, 0, 1) != 0;
 		g_cfg.enbFollow = iniInt("EnbDofFollow",    1, 0, 1) != 0;
-		g_cfg.enbScale  = iniFloat("EnbDofScale",   0.25f, 0.0f, 5.0f);
+		g_cfg.enbStrength = iniFloat("EnbDofStrength", 1.0f, 0.0f, 20.0f);
 		g_logOn = g_cfg.log;
 		iniEnsureKey("KeyFreeLook", g_cfg.keyFreeLook);   // new in 3.9
 		iniEnsureInt("LightsAllClips", 0);                // new in 3.11
 		iniEnsureInt("EnbDof", 0);                        // new in 4.6
 		iniEnsureInt("EnbDofFollow", 1);
+		{
+			char b[8] = {};
+			GetPrivateProfileStringA(kSection, "EnbDofStrength", "?", b, sizeof(b), g_ini);   // new in 4.10
+			if (!strcmp(b, "?")) WritePrivateProfileStringA(kSection, "EnbDofStrength", "1.0", g_ini);
+		}
 		dropRetiredKeys();
 	}
 

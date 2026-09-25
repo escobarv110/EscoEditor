@@ -55,6 +55,7 @@ namespace menu
 	constexpr int      kVideoEditorClass = 9;     // SF_BASE_CLASS_VIDEO_EDITOR
 	constexpr unsigned kOurOptionId      = 0x27;  // MARKER_MENU_OPTION_HELP_TEXT
 	constexpr int      NAV_RIGHT = 0xBE, NAV_LEFT = 0xBD, NAV_ACCEPT = 0xC9;
+	constexpr int      NAV_DOWN = 0xBB, NAV_UP = 0xBC;   // INPUT_FRONTEND_DOWN / _UP, next to LEFT / RIGHT
 	constexpr int      kColumnCapacity = 16;      // the Scaleform column draws no more
 
 	const char* kPmm =
@@ -89,11 +90,11 @@ namespace menu
 	enum Page { PAGE_CLOSED = 0, PAGE_CAMSPEED, PAGE_CLIPBOARD, PAGE_SCENE, PAGE_LIGHTS, PAGE_COUNT };
 	enum Row  { R_HEADER = 0, R_SPEED, R_VSPEED, R_LOOK, R_FREE,
 	            R_FROM, R_TO, R_COPY, R_CUT, R_PASTE, R_SPDALL, R_TIME, R_WEATHER,
-	            R_DCOPY, R_DPASTE, R_DALL, R_ENB, R_ENBPAGE, R_ENBP0, R_ENBP1, R_ENBP2, R_ENBP3, R_ENBP4, R_LOPEN, R_LKEY, R_LALL, R_COUNT };
+	            R_DCOPY, R_DPASTE, R_DALL, R_ENB, R_ENBO0, R_ENBO_LAST = R_ENBO0 + 11, R_LOPEN, R_LKEY, R_LALL, R_COUNT };
 
 	int g_kind = K_MARKER;   // the column our rows are in right now
 	int g_page = PAGE_CAMSPEED;
-	int s_rows[12];
+	int s_rows[24];
 	int s_shown = 0;
 
 	bool pageAvailable(int p)
@@ -127,11 +128,17 @@ namespace menu
 		{
 			s_rows[s_shown++] = R_DCOPY; s_rows[s_shown++] = R_DPASTE; s_rows[s_shown++] = R_DALL;
 			s_rows[s_shown++] = R_ENB;
-			// this keyframe's ENB options, a page at a time, while the switch is on
+			// this keyframe's ENB options, one row each, as many as the column
+			// has room for below the game's own rows; the rest scroll in
 			if (g_cfg.enbDof && enbdof::s_ready)
 			{
-				s_rows[s_shown++] = R_ENBPAGE;
-				for (int i = 0; i < enbdof::pageRows() && i < 5; ++i) s_rows[s_shown++] = R_ENBP0 + i;
+				const int count = enbdof::listCount();
+				int room = kColumnCapacity - (g_first > 0 ? g_first : 0) - s_shown;
+				if (room > R_ENBO_LAST - R_ENBO0 + 1) room = R_ENBO_LAST - R_ENBO0 + 1;
+				if (room < 1) room = 1;
+				if (enbdof::g_scroll > count - room) enbdof::g_scroll = count - room;
+				if (enbdof::g_scroll < 0) enbdof::g_scroll = 0;
+				for (int i = 0; i < room && enbdof::g_scroll + i < count; ++i) s_rows[s_shown++] = R_ENBO0 + i;
 			}
 			return;
 		}
@@ -156,6 +163,10 @@ namespace menu
 		default: break;
 		}
 	}
+
+	bool isEnbOpt(int r) { return r >= R_ENBO0 && r <= R_ENBO_LAST; }
+	int  enbParam(int r) { return isEnbOpt(r) ? enbdof::listParam(enbdof::g_scroll + (r - R_ENBO0)) : -1; }
+	int  enbShown()      { int n = 0; for (int i = 0; i < s_shown; ++i) if (isEnbOpt(s_rows[i])) ++n; return n; }
 
 	bool isAction(int r) { return r == R_COPY || r == R_CUT || r == R_PASTE || r == R_DCOPY || r == R_DPASTE || r == R_DALL || r == R_LOPEN; }
 
@@ -221,16 +232,12 @@ namespace menu
 		case R_DPASTE:  return "Paste DOF";
 		case R_DALL:    return "DOF To All";
 		case R_ENB:     return "ENB";
-		case R_ENBPAGE: return "ENB Options";
-		case R_ENBP0: case R_ENBP1: case R_ENBP2: case R_ENBP3: case R_ENBP4:
-		{
-			const int p = enbdof::pageParam(r - R_ENBP0);
-			return p >= 0 ? enbdof::kDefs[p].label : "";
-		}
 		case R_LOPEN:   return "Open Light Editor";
 		case R_LKEY:    return "Light Editor Key";
 		case R_LALL:    return "Lights In Every Clip";
-		default:        return "";
+		default:
+			if (isEnbOpt(r)) { const int p = enbParam(r); return p >= 0 ? enbdof::kDefs[p].label : ""; }
+			return "";
 		}
 	}
 
@@ -252,15 +259,15 @@ namespace menu
 		case R_LKEY:    return lights::g_capture ? "Press a key" : keyName(g_cfg.keyLights, buf, cap);
 		case R_LALL:    return g_cfg.lightsAll ? "On" : "Off";
 		case R_ENB:     return !enbdof::s_found ? "No ENB" : g_cfg.enbDof ? "On" : "Off";
-		case R_ENBPAGE: return enbdof::pageName();
-		case R_ENBP0: case R_ENBP1: case R_ENBP2: case R_ENBP3: case R_ENBP4:
-		{
-			const int p = enbdof::pageParam(r - R_ENBP0);
-			if (p < 0) return "";
-			bool own;
-			return enbdof::format(p, enbdof::valueHere(p, &own), buf, cap);
-		}
-		default:        return "";
+		default:
+			if (isEnbOpt(r))
+			{
+				const int p = enbParam(r);
+				if (p < 0) return "";
+				bool own;
+				return enbdof::format(p, enbdof::valueHere(p, &own), buf, cap);
+			}
+			return "";
 		}
 	}
 
@@ -278,16 +285,14 @@ namespace menu
 		case R_LKEY:    return lights::kCycleCount;
 		case R_LALL:    return 2;
 		case R_ENB:     return 2;
-		case R_ENBPAGE: return enbdof::kPageCount;
-		case R_ENBP0: case R_ENBP1: case R_ENBP2: case R_ENBP3: case R_ENBP4: return 100;
-		default:        return -1;
+		default:        return isEnbOpt(r) ? 100 : -1;
 		}
 	}
 
 	// One short line each - the row name says most of it.
 	const char* rowHelp(int r)
 	{
-		static char buf[200];
+		static char buf[320];
 		char s[48];
 		switch (r)
 		{
@@ -319,17 +324,7 @@ namespace menu
 		case R_ENB:
 			if (!enbdof::s_found) return "No ENB in the game. With ENB (NVE's is fine) this row hands it the depth of field of every keyframe.";
 			if (!enbdof::s_ready) return "ENB found - waiting for its depth of field shader to load (EnableDepthOfField on in ENB).";
-			return "On: ENB draws this depth of field - each keyframe's Focus and Intensity, and the ENB options below, per keyframe.";
-		case R_ENBPAGE: return "Left/right: which ENB options are shown - Focus, Blur, Near field, Anamorphic, Quality, Auto-focus, Lens.";
-		case R_ENBP0: case R_ENBP1: case R_ENBP2: case R_ENBP3: case R_ENBP4:
-		{
-			const int p = enbdof::pageParam(r - R_ENBP0);
-			if (p < 0) return "";
-			bool own;
-			enbdof::valueHere(p, &own);
-			return own ? "This keyframe's own. Left/right changes it; Enter hands it back to the keyframes around it."
-					   : "Blended from the keyframes around it. Left/right gives this keyframe its own.";
-		}
+			return "On: ENB draws the blur. Set this keyframe to Custom: Focal Distance is where ENB focuses, Intensity how fast the blur comes in. The rows below are ENB's own, per keyframe.";
 		case R_LOPEN:
 			if (!lightui::g_imgui) return "Needs ReShade with add-on support: the light editor is a ReShade window.";
 			snprintf(buf, sizeof(buf), "Place lights with a 3D gizmo. %s opens and closes it too.", keyName(g_cfg.keyLights, s, sizeof(s)));
@@ -338,7 +333,22 @@ namespace menu
 		case R_LKEY:
 			if (lights::g_capture || lights::since(GetTickCount64(), lights::g_keyMsgAt) < 6000) return lights::g_keyMsg;
 			return "Left/right: pick a key. Enter: then press any key.";
-		default: return "";
+		default:
+			if (isEnbOpt(r))
+			{
+				const int p = enbParam(r);
+				if (p < 0) return "";
+				bool own;
+				enbdof::valueHere(p, &own);
+				const int n = enbdof::listCount(), k = enbdof::g_scroll + (r - R_ENBO0) + 1;
+				const bool below = r == s_rows[s_shown - 1] && enbdof::g_scroll + enbShown() < n;
+				const bool above = r == R_ENBO0 && enbdof::g_scroll > 0;
+				snprintf(buf, sizeof(buf), "%s %s (%d of %d%s)", enbdof::hint(p),
+					own ? "This keyframe's own; Enter gives it back to the keyframes around it." : "Left/right gives this keyframe its own. Hold to go faster.",
+					k, n, below ? " - down for more" : above ? " - up for more" : "");
+				return buf;
+			}
+			return "";
 		}
 	}
 
@@ -393,11 +403,9 @@ namespace menu
 		case R_LKEY:    lights::stepShortcut(delta); break;
 		case R_LALL:    lights::toggleAllClips(); break;
 		case R_ENB:     enbdof::setOn(!g_cfg.enbDof); return true;     // the option rows come and go
-		case R_ENBPAGE: enbdof::nextPage(delta); return true;
-		case R_ENBP0: case R_ENBP1: case R_ENBP2: case R_ENBP3: case R_ENBP4:
-			enbdof::stepHere(enbdof::pageParam(r - R_ENBP0), delta);
+		default:
+			if (isEnbOpt(r)) enbdof::stepHere(enbParam(r), delta);
 			break;
-		default: break;
 		}
 		return false;
 	}
@@ -417,12 +425,11 @@ namespace menu
 		case R_DPASTE: return dof::paste();          // the stock DOF rows show the new values after a rebuild
 		case R_DALL:   dof::applyToAll();      return false;
 		case R_ENB:    enbdof::setOn(!g_cfg.enbDof); return true;
-		case R_ENBP0: case R_ENBP1: case R_ENBP2: case R_ENBP3: case R_ENBP4:
-			enbdof::clearHere(enbdof::pageParam(r - R_ENBP0));
-			return false;
 		case R_LOPEN:  if (lightui::g_imgui) InterlockedExchange(&lights::g_openReq, 1); return false;
 		case R_LKEY:   lights::beginCapture(lights::CAP_MENU); return false;
-		default: return false;
+		default:
+			if (isEnbOpt(r)) enbdof::clearHere(enbParam(r));
+			return false;
 		}
 	}
 
@@ -547,6 +554,10 @@ namespace menu
 		origUpdateHelp(idx);
 	}
 
+	ULONGLONG s_holdStart = 0, s_holdLast = 0;
+	int s_holdRow = -1, s_holdDir = 0;
+	int s_navLogs = 0, s_navLogged = -1;
+
 	void __fastcall hkMenuInput(int nav)
 	{
 		const int  focus = *(int*)a_FocusIndex;
@@ -554,17 +565,42 @@ namespace menu
 		const bool acc   = nav == NAV_ACCEPT;
 		if (ownsRow(focus))
 		{
+			const int r = logicalAt(focus);
+			if (!lr && !acc && s_navLogs < 4 && nav != s_navLogged)
+			{
+				++s_navLogs;
+				s_navLogged = nav;
+				logf("menu: input 0x%X on our row", nav);    // shows which codes up / down arrive as
+			}
+			// Up / down at either end of the ENB options scrolls them: the
+			// column cannot draw them all. The focus stays on the same row.
+			if ((nav == NAV_DOWN || nav == NAV_UP) && isEnbOpt(r) && g_kind == K_DOF && !fromMouse())
+			{
+				const bool last = focus == g_first + s_shown - 1;
+				if (nav == NAV_DOWN && last && enbdof::g_scroll + enbShown() < enbdof::listCount()) { ++enbdof::g_scroll; rebuild(focus); return; }
+				if (nav == NAV_UP && r == R_ENBO0 && enbdof::g_scroll > 0) { --enbdof::g_scroll; rebuild(focus); return; }
+			}
 			if (!lr && !acc) { origMenuInput(nav); return; }
 			if (fromMouse())
 			{
 				if (g_mouseDrops++ < 3) logf("menu: mouse press on our row ignored (keyboard only)");
 				return;
 			}
-			const int r = logicalAt(focus);
 			if (lr)
 			{
 				const bool rangeRow = r == R_FROM || r == R_TO;
-				if (adjust(r, nav == NAV_RIGHT ? 1 : -1) && !rangeRow) rebuild(focus);
+				// Held, left/right speeds up the way the game's own sliders do:
+				// the key or stick repeats, and the longer it has been held the
+				// more each repeat counts.
+				const int dir = nav == NAV_RIGHT ? 1 : -1;
+				const ULONGLONG now = GetTickCount64();
+				if (r != s_holdRow || dir != s_holdDir || now - s_holdLast > 700) s_holdStart = now;
+				s_holdRow = r; s_holdDir = dir; s_holdLast = now;
+				const ULONGLONG held = now - s_holdStart;
+				int mult = held < 500 ? 1 : held < 1200 ? 2 : held < 2000 ? 4 : 8;
+				if (!isEnbOpt(r) && r != R_TIME) mult = 1;
+				else if (r == R_TIME && mult > 4) mult = 4;
+				if (adjust(r, dir * mult) && !rangeRow) rebuild(focus);
 				else if (rangeRow) refreshPage(focus);
 				else refreshRow(focus, r);
 				return;

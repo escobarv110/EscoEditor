@@ -9,9 +9,9 @@
 //    1. what the user set here for the session (starts as ENB's own values)
 //    2. keys over the clip, every ENB DOF option, interpolated like a light
 //    3. the Rockstar Editor's own Depth of Field on the keyframes either side
-//       of the playhead: a Custom keyframe with manual focus sets the focus
-//       distance, its intensity (1..10) times a scale sets the aperture, and
-//       a keyframe set to None means no blur at all.
+//       of the playhead: a Custom keyframe's Focal Distance is where ENB
+//       focuses (in metres, converted to NVE's own unit), its Intensity
+//       (a percentage) sets the aperture, and None means no blur at all.
 //
 //  Values are pushed from ENB's own BeginFrame callback (the place the SDK is
 //  meant to be used from), only when they change. Before ENB saves its
@@ -42,32 +42,37 @@ namespace enbdof
 	enum Kind : uint8_t { K_FLOAT = 0, K_INT = 1, K_BOOL = 2 };
 	struct Def { const char* ui; Kind kind; float lo, hi; const char* label; };
 	constexpr int N = lights::kEnbParams;
+	// The ranges are the UIMin / UIMax NVE's compiled enbdepthoffield.fx.bin
+	// gives each one. The focus distance is kept in metres here and converted
+	// on its way to ENB (enbDistance): NVE's "Distance" is not metres.
 	const Def kDefs[N] = {
 		{ "--> Click here to enable Mouse Focus",       K_BOOL,   0.0f,    1.0f, "Mouse focus" },
-		{ "--> Blur the near field toggle",             K_BOOL,   0.0f,    1.0f, "Blur the near field" },
-		{ "--> Near field intensity",                   K_FLOAT,  0.0f,   20.0f, "Near field intensity" },
-		{ "--> Manual Focus : Distance",                K_FLOAT,  0.1f, 1000.0f, "Focus distance (m)" },
+		{ "--> Blur the near field toggle",             K_BOOL,   0.0f,    1.0f, "Near field blur" },
+		{ "--> Near field intensity",                   K_FLOAT,  0.0f, 1000.0f, "Near field power" },
+		{ "--> Manual Focus : Distance",                K_FLOAT,  0.1f, 2000.0f, "Focus distance (m)" },
 		{ "--> Manual Focus : Aperture",                K_FLOAT,  0.0f,   10.0f, "Aperture" },
-		{ "--> Manual Focus : Near field power",        K_FLOAT,  0.0f,   10.0f, "Near field power" },
+		{ "--> Manual Focus : Near field power",        K_FLOAT,  0.0f, 1000.0f, "Near field power" },
 		{ "--> Auto-focus : Aperture",                  K_FLOAT,  0.0f,   10.0f, "Auto-focus aperture" },
-		{ "--> Auto-focus : Speed",                     K_FLOAT,  0.0f,   20.0f, "Auto-focus speed" },
-		{ "--> Auto-focus : Range boost",               K_FLOAT,  0.0f,   10.0f, "Auto-focus range boost" },
+		{ "--> Auto-focus : Speed",                     K_FLOAT,  0.01f, 100.0f, "Auto-focus speed" },
+		{ "--> Auto-focus : Range boost",               K_FLOAT,  0.0f,  100.0f, "Auto-focus range boost" },
 		{ "--> Auto-focus : Point of interestX",        K_FLOAT,  0.0f,    1.0f, "Auto-focus point X" },
 		{ "--> Auto-focus : Point of interestY",        K_FLOAT,  0.0f,    1.0f, "Auto-focus point Y" },
-		{ "--> Blur : Chromatic Spread",                K_FLOAT,  0.0f,   10.0f, "Chromatic spread" },
-		{ "--> Blur : Size",                            K_FLOAT,  0.0f,   10.0f, "Blur size" },
-		{ "--> Blur : Quality Steps",                   K_INT,    1.0f,   32.0f, "Blur quality steps" },
-		{ "--> DOF : Maximum size",                     K_FLOAT,  0.0f,  100.0f, "Maximum size" },
-		{ "--> DOF : Quality",                          K_FLOAT,  0.0f,    4.0f, "Quality" },
-		{ "--> DOF : Performance scaler",               K_FLOAT,  0.0f,    4.0f, "Performance scaler" },
+		{ "--> Blur : Chromatic Spread",                K_FLOAT,  1.0f,   32.0f, "Chromatic spread" },
+		{ "--> Blur : Size",                            K_FLOAT,  0.0f,    2.0f, "Blur size" },
+		{ "--> Blur : Quality Steps",                   K_INT,    1.0f,   16.0f, "Blur quality steps" },
+		{ "--> DOF : Maximum size",                     K_FLOAT,  2.0f,   20.0f, "Maximum blur" },
+		{ "--> DOF : Quality",                          K_FLOAT,  0.1f,    2.0f, "Quality" },
+		{ "--> DOF : Performance scaler",               K_FLOAT,  0.1f,    1.0f, "Performance scaler" },
 		{ "--> DOF : Anamorphic enable",                K_BOOL,   0.0f,    1.0f, "Anamorphic" },
-		{ "--> DOF : Anamorphic stretch",               K_FLOAT,  0.0f,    5.0f, "Anamorphic stretch" },
-		{ "--> DOF : Distribution",                     K_FLOAT,  0.0f,    5.0f, "Distribution" },
-		{ "--> Lens Distortion : Distortion Amount",    K_FLOAT, -1.0f,    1.0f, "Lens distortion" },
+		{ "--> DOF : Anamorphic stretch",               K_FLOAT,  0.0f,    4.0f, "Anamorphic stretch" },
+		{ "--> DOF : Distribution",                     K_FLOAT,  1.0f,    4.0f, "Distribution" },
+		{ "--> Lens Distortion : Distortion Amount",    K_FLOAT,  0.0f,    1.0f, "Lens distortion" },
 		{ "--> Lens Distortion : Always zoomed",        K_BOOL,   0.0f,    1.0f, "Distortion: always zoomed" },
 		{ "--> Lens Distortion : Zoom Amount",          K_FLOAT,  0.0f,    1.0f, "Distortion: zoom" },
-		// These six look like separators in ENB's window and are switches: with
-		// Manual DOF and Auto-focus DOF both off, NVE's shader runs no focus mode.
+		// Six lines that look like separators in ENB's window. They ARE only
+		// labels: the shader declares them (text0, textmanu, ...) and never
+		// reads them. 4.9 took them for switches; they stay in the table so
+		// keys written then still read, and are never sent to ENB.
 		{ "-------------------------- DOF Near Field settings ------------", K_BOOL, 0.0f, 1.0f, "Near field section" },
 		{ "-------------------------- Manual DOF -------------------------", K_BOOL, 0.0f, 1.0f, "Manual DOF" },
 		{ "-------------------------- Auto-focus DOF ---------------------", K_BOOL, 0.0f, 1.0f, "Auto-focus DOF" },
@@ -75,8 +80,15 @@ namespace enbdof
 		{ "-------------------------- Quality Settings -------------------", K_BOOL, 0.0f, 1.0f, "Quality section" },
 		{ "-------------------------- Misc. settings ---------------------", K_BOOL, 0.0f, 1.0f, "Misc section" },
 	};
-	enum { I_NEAR = 1, I_DIST = 3, I_APERTURE = 4, I_AUTO_APERTURE = 6,
+	enum { I_MOUSE = 0, I_NEAR = 1, I_AUTO_NEARPOWER = 2, I_DIST = 3, I_APERTURE = 4, I_NEARPOWER = 5, I_AUTO_APERTURE = 6,
 	       I_SEC_NEAR = 23, I_SEC_MANUAL = 24, I_SEC_AUTO = 25, I_SEC_BLUR = 26, I_SEC_QUALITY = 27, I_SEC_MISC = 28 };
+	inline bool isLabel(int i) { return i >= I_SEC_NEAR; }
+
+	// NVE's two techniques. "Gameplay DOF Manual" focuses at Manual Focus :
+	// Distance; "Gameplay DOF Auto-focus" measures the depth at its point of
+	// interest itself. Each reads its own aperture and near field power.
+	enum { TECH_AUTO = 0, TECH_MANUAL = 1 };
+	int s_tech = -1;                      // -1 not known yet: taken as Manual
 
 	uint8_t kinds[N] = {};                // for lights::evalEnb, filled on start
 
@@ -145,6 +157,31 @@ namespace enbdof
 		return (int)floorf(a + 0.5f) == (int)floorf(b + 0.5f);
 	}
 
+	// ---- NVE's focus distance ----------------------------------------------------
+	// NVE's manual pass focuses where 1 - 1/(Distance^2 * depth) meets the
+	// depth, and GTA's depth is reversed (near / z). Solved for z, the plane in
+	// focus sits at z = Distance^2 * near * (1 - near / z): NVE's "7.0" is about
+	// 4.9 m with the Rockstar Editor camera's 0.1 m near clip, and "51.6" - a
+	// keyframe's 51.6 m sent as it was until 4.9 - was nearly 270 m. So the
+	// distance stays in metres everywhere here and is converted on its way out.
+	float s_near = 0.1f;
+	float nearClip()
+	{
+		const lights::Ctx c = lights::ctx();
+		if (c.valid && c.cam.nearClip > 0.01f && c.cam.nearClip < 2.0f) s_near = c.cam.nearClip;
+		return s_near;
+	}
+	inline float enbDistance(float metres, float n)   // metres -> NVE's Distance
+	{
+		if (!(metres > 2.0f * n)) metres = 2.0f * n;
+		return metres / sqrtf(n * (metres - n));
+	}
+	inline float metresOf(float d, float n)           // NVE's Distance -> metres
+	{
+		if (!(d > 2.0f)) return 2.0f * n;
+		return n * (d * d + d * sqrtf(d * d - 4.0f)) * 0.5f;
+	}
+
 	// ---- finding ENB and its DOF shader ----------------------------------------
 	// The SDK is part of ENB's own d3d11.dll - NVE's has it - and nothing has
 	// to be installed. Finding that DLL is the whole problem: ENB loads the
@@ -156,8 +193,15 @@ namespace enbdof
 	char s_d3dSeen[4][300] = {};    // the d3d11 / dxgi modules found, for the log
 	int  s_d3dSeenCount = 0;
 
+	wchar_t s_enbIni[MAX_PATH] = {};   // ENB's enbseries\enbdepthoffield.fx.ini, next to its d3d11.dll
+
 	bool take(HMODULE h, FnSet set, FnGet get, const char* how)
 	{
+		if (GetModuleFileNameW(h, s_enbIni, MAX_PATH))
+		{
+			if (wchar_t* slash = wcsrchr(s_enbIni, L'\\')) { slash[1] = 0; wcscat_s(s_enbIni, L"enbseries\\enbdepthoffield.fx.ini"); }
+			else s_enbIni[0] = 0;
+		}
 		s_set = set;
 		s_get = get;
 		s_ver   = (FnVer)GetProcAddress(h, "ENBGetSDKVersion");
@@ -313,6 +357,23 @@ namespace enbdof
 
 	void WINAPI onEnb(int type);
 
+	// Which of NVE's techniques ENB runs: asked of ENB, else read from its
+	// enbdepthoffield.fx.ini (the one next to ENB's own d3d11.dll).
+	void readTechnique()
+	{
+		int t = -1;
+		Param p;
+		if (getRaw(s_file, s_cat, "TECHNIQUE", &p) && (p.type == P_INT || p.type == P_HEX)) memcpy(&t, p.data, 4);
+		if (t < 0 && s_enbIni[0]) t = (int)GetPrivateProfileIntW(L"ENBDEPTHOFFIELD.FX", L"TECHNIQUE", -1, s_enbIni);
+		if (t != TECH_AUTO && t != TECH_MANUAL) t = -1;
+		if (t == s_tech) return;
+		s_tech = t;
+		logf("enb: ENB runs NVE's %s", t == TECH_AUTO ? "\"Gameplay DOF Auto-focus\" - it measures the focus itself; the keyframe's focus distance is not used"
+			: t == TECH_MANUAL ? "\"Gameplay DOF Manual\" - the keyframe's focus distance is where it focuses"
+			: "technique (not readable) - taken as \"Gameplay DOF Manual\"");
+	}
+	inline bool techAuto() { return s_tech == TECH_AUTO; }
+
 	// Which filename / category pair ENB wants for a shader parameter is not
 	// written down anywhere reliable, so each plausible one is asked for a value
 	// that must exist, and the one that answers is kept.
@@ -334,14 +395,16 @@ namespace enbdof
 			int known = 0;
 			for (int i = 0; i < N; ++i)
 			{
-				s_known[i] = readValue(s_file, s_cat, i, &s_base[i]);
+				s_known[i] = !isLabel(i) && readValue(s_file, s_cat, i, &s_base[i]);
 				if (s_known[i]) ++known;
 				s_manual[i] = s_base[i];
 				s_havePushed[i] = false;
 			}
+			s_manual[I_DIST] = metresOf(s_base[I_DIST], nearClip());
 			s_ready = true;
-			logf("enb: enbdepthoffield.fx answers as (%s, %s): %d of %d options known, focus distance %.2f m, aperture %.2f",
-				s_file ? s_file : "null", s_cat ? s_cat : "null", known, N, s_base[I_DIST], s_base[I_APERTURE]);
+			logf("enb: enbdepthoffield.fx answers as (%s, %s): %d options known, focus distance %.2f (about %.1f m), aperture %.2f",
+				s_file ? s_file : "null", s_cat ? s_cat : "null", known, s_base[I_DIST], s_manual[I_DIST], s_base[I_APERTURE]);
+			readTechnique();
 			if (s_setCb)
 			{
 				__try { s_setCb(onEnb); logf("enb: ENB calls EscoEditor back every frame from now on"); }
@@ -369,6 +432,13 @@ namespace enbdof
 		if (!s_ready || s_dirty) return;
 		for (int i = 0; i < N; ++i)
 			if (s_known[i]) readValue(s_file, s_cat, i, &s_base[i]);
+	}
+
+	// The session values back to ENB's own (the focus distance in metres).
+	void resetManual()
+	{
+		for (int i = 0; i < N; ++i) s_manual[i] = s_base[i];
+		s_manual[I_DIST] = metresOf(s_base[I_DIST], nearClip());
 	}
 
 	// ---- the Rockstar Editor's Depth of Field at the playhead -----------------
@@ -413,34 +483,40 @@ namespace enbdof
 
 	// What the Rockstar Editor's keyframes ask of ENB at `t`. Pure enough to be
 	// tested: works on the two keyframes it is given.
-	// The game's intensity is shown as a percentage in its menu. Stored 1..10
-	// it is used as it is; stored 0..1 it is scaled to match.
-	inline float intensity10(float x) { return (x > 0.0f && x < 1.0f) ? x * 10.0f : x; }
+	//
+	// The game's intensity is a percentage (a keyframe reads 50.0 at 50%); one
+	// stored as 0..1 is taken as a fraction. NVE's aperture is NOT a blur
+	// amount: its circle of confusion is |focus - depth| x aperture x 36,
+	// capped at 1.5 - so at its own 0.5, anything 8% past the focus is already
+	// as blurred as it gets, and 1.55 or 2.30 look the same. The useful range
+	// is far below 1, where the aperture decides how quickly the blur comes
+	// in with distance. 100% is NVE's 0.5; 50% is 0.125; 20% is 0.02.
+	inline float intensityPct(float x)
+	{
+		if (!(x > 0.0f)) return 0.0f;
+		const float p = x <= 1.0f ? x * 100.0f : x;
+		return p > 100.0f ? 100.0f : p;
+	}
+	inline float apertureOf(float pct, float strength) { const float f = pct / 100.0f; return 0.5f * f * f * strength; }
 	int s_rawLogs = 0;
 
-	// `filled`: options a keyframe of this clip sets itself; those are left alone.
-	void applyEditor(const EdDof& a, const EdDof& b, float t, float scale, float* v, char* line, int cap, uint32_t filled = 0)
+	// `filled`: options a keyframe of this clip sets itself; those are left
+	// alone - except the focus and the aperture of a Custom keyframe, which
+	// are its own Focal Distance and Intensity rows in the game's menu.
+	void applyEditor(const EdDof& a, const EdDof& b, float t, float strength, float* v, char* line, int cap, uint32_t filled = 0)
 	{
-		const bool ownDist = (filled & (1u << I_DIST)) != 0;
-		const bool ownAp   = (filled & (1u << I_APERTURE)) != 0;
-		const bool ownAuto = (filled & (1u << I_AUTO_APERTURE)) != 0;
-		const bool ownMan  = (filled & (1u << I_SEC_MANUAL)) != 0;
-		const bool ownAF   = (filled & (1u << I_SEC_AUTO)) != 0;
-		// Which of NVE's focus modes runs: manual focus runs Manual DOF, auto or
-		// target focus runs Auto-focus DOF, None runs neither.
-		auto modes = [&](bool man, bool af) { if (!ownMan) v[I_SEC_MANUAL] = man ? 1.0f : 0.0f; if (!ownAF) v[I_SEC_AUTO] = af ? 1.0f : 0.0f; };
+		(void)filled;
 		if (s_rawLogs < 1 && a.have) { ++s_rawLogs; logf("enb: the keyframe's stored DOF intensity reads %.3f (mode %s)", a.intensity, dof::modeName(a.mode)); }
 		if (a.mode == dof::MODE_NONE)
 		{
-			if (!ownAp) v[I_APERTURE] = 0.0f;
-			if (!ownAuto) v[I_AUTO_APERTURE] = 0.0f;
-			modes(false, false);
+			v[I_APERTURE] = 0.0f;
+			v[I_AUTO_APERTURE] = 0.0f;
 			if (line) snprintf(line, cap, "keyframe DOF None - no blur");
 			return;
 		}
 		if (a.mode != dof::MODE_CUSTOM)
 		{
-			if (line) snprintf(line, cap, "keyframe DOF Default - ENB's own values");
+			if (line) snprintf(line, cap, "keyframe DOF Default - ENB's own focus and aperture");
 			return;
 		}
 		float u = 0.0f;
@@ -448,21 +524,25 @@ namespace enbdof
 		if (blend) u = (t - a.t) / (b.t - a.t);
 		if (!(u >= 0.0f)) u = 0.0f;
 		if (u > 1.0f) u = 1.0f;
-		const float ia = intensity10(a.intensity), ib = blend ? intensity10(b.intensity) : ia;
-		const float inten = ia + (ib - ia) * u;
-		if (!ownAp) v[I_APERTURE] = inten * scale;
-		if (!ownAuto) v[I_AUTO_APERTURE] = inten * scale;
-		modes(a.focus == dof::FOCUS_MANUAL, a.focus != dof::FOCUS_MANUAL);
-		if (a.focus == dof::FOCUS_MANUAL)
+		const float pa = intensityPct(a.intensity), pb = blend ? intensityPct(b.intensity) : pa;
+		const float pct = pa + (pb - pa) * u;
+		v[I_APERTURE] = v[I_AUTO_APERTURE] = apertureOf(pct, strength);
+		// The keyframe's focal distance, whatever its focus mode: NVE's Manual
+		// technique cannot measure a focus of its own without the mouse.
+		const bool blendDist = blend && b.dist > 0.0f;
+		const float d = a.dist + ((blendDist ? b.dist : a.dist) - a.dist) * u;
+		if (d > 0.0f) v[I_DIST] = d;
+		v[I_MOUSE] = 0.0f;
+		if (line)
 		{
-			const bool blendDist = blend && b.focus == dof::FOCUS_MANUAL;
-			const float d = a.dist + ((blendDist ? b.dist : a.dist) - a.dist) * u;
-			if (d > 0.0f && !ownDist) v[I_DIST] = d;
-			if (line) snprintf(line, cap, "keyframe DOF Custom, manual focus %.2f m, intensity %.1f -> aperture %.2f", v[I_DIST], inten, v[I_APERTURE]);
+			if (techAuto())
+				snprintf(line, cap, "keyframe DOF Custom, intensity %.0f%% -> aperture %.3f; ENB's Auto-focus technique picks the focus", pct, v[I_APERTURE]);
+			else if (a.focus == dof::FOCUS_MANUAL)
+				snprintf(line, cap, "keyframe DOF Custom, focus %.2f m, intensity %.0f%% -> aperture %.3f", v[I_DIST], pct, v[I_APERTURE]);
+			else
+				snprintf(line, cap, "keyframe DOF Custom, %s focus - ENB's Manual technique cannot measure it, so the keyframe's focal distance %.2f m; intensity %.0f%% -> aperture %.3f",
+					dof::focusName(a.focus), v[I_DIST], pct, v[I_APERTURE]);
 		}
-		else if (line)
-			snprintf(line, cap, "keyframe DOF Custom, %s focus, intensity %.1f -> aperture %.2f (focus left to ENB)",
-				dof::focusName(a.focus), inten, v[I_APERTURE]);
 	}
 
 	// ---- one frame -------------------------------------------------------------
@@ -489,7 +569,7 @@ namespace enbdof
 		if (g_cfg.enbFollow)
 		{
 			EdDof a, b;
-			if (dofAround(t, a, b)) applyEditor(a, b, t, g_cfg.enbScale, w.v, s_editorLine, sizeof(s_editorLine), filled);
+			if (dofAround(t, a, b)) applyEditor(a, b, t, g_cfg.enbStrength, w.v, s_editorLine, sizeof(s_editorLine), filled);
 			else snprintf(s_editorLine, sizeof(s_editorLine), "no keyframes in this clip yet");
 		}
 	}
@@ -506,24 +586,26 @@ namespace enbdof
 			if (s_dirty) restoreBase();
 			return;
 		}
+		const float n = nearClip();
 		for (int i = 0; i < N; ++i)
 		{
 			if (!s_known[i]) continue;
-			if (s_havePushed[i] && same(i, s_pushed[i], w.v[i])) continue;
-			if (writeValue(i, w.v[i]))
+			const float out = i == I_DIST ? enbDistance(w.v[i], n) : w.v[i];   // metres -> NVE's Distance
+			if (s_havePushed[i] && same(i, s_pushed[i], out)) continue;
+			if (writeValue(i, out))
 			{
-				s_pushed[i] = w.v[i];
+				s_pushed[i] = out;
 				s_havePushed[i] = true;
 				s_dirty = true;
 				// The first few pushes of what matters are asked back, so the log
 				// shows plainly whether ENB's shader took them.
-				if ((i == I_DIST || i == I_APERTURE || i == I_SEC_MANUAL || i == I_SEC_AUTO) && s_checkLogs < 8)
+				if ((i == I_DIST || i == I_APERTURE) && s_checkLogs < 6)
 				{
 					++s_checkLogs;
 					float back = -12345.0f;
 					const bool read = readValue(s_file, s_cat, i, &back);
-					logf("enb: \"%s\" set to %.3f - ENB reports %s%.3f%s", kDefs[i].label, w.v[i],
-						read ? "" : "(could not read back) ", back, read && same(i, back, w.v[i]) ? ", taken" : ", NOT TAKEN");
+					logf("enb: \"%s\" set to %.3f%s - ENB reports %s%.3f%s", kDefs[i].label, out, i == I_DIST ? " (NVE's units)" : "",
+						read ? "" : "(could not read back) ", back, read && same(i, back, out) ? ", taken" : ", NOT TAKEN");
 				}
 			}
 			else if (s_setFails++ < 3) logf("enb: ENB would not take \"%s\"", kDefs[i].ui);
@@ -565,31 +647,28 @@ namespace enbdof
 	}
 
 	// ---- the ENB rows in each keyframe's Depth of Field menu --------------------
-	//  The game's column draws 16 rows. Its own DOF rows, Copy / Paste / To All
-	//  and the ENB switch take up to eight, so the options come a page at a time:
-	//  an "ENB Options" row picks the page, and at most five rows follow.
-	struct Page { const char* name; int n; int p[5]; };
-	const Page kPages[] = {
-		{ "Focus",      2, { I_DIST, I_APERTURE } },
-		{ "Modes",      3, { I_SEC_MANUAL, I_SEC_AUTO, 0 } },
-		{ "Blur",       4, { 12, 11, 13, I_SEC_BLUR } },
-		{ "Near field", 4, { I_SEC_NEAR, 1, 2, 5 } },
-		{ "Anamorphic", 2, { 17, 18 } },
-		{ "Quality",    5, { 14, 15, 16, 19, I_SEC_QUALITY } },
-		{ "Auto-focus", 5, { 6, 7, 8, 9, 10 } },
-		{ "Lens",       4, { I_SEC_MISC, 20, 21, 22 } } };
-	constexpr int kPageCount = (int)(sizeof(kPages) / sizeof(kPages[0]));
-	// One press of left or right. The focus distance moves by 15% a press, so
-	// it covers a metre and a hundred metres alike.
-	const float kStep[N] = { 1.0f, 1.0f, 0.25f, 0.0f, 0.05f, 0.1f, 0.05f, 0.25f, 0.1f, 0.01f, 0.01f,
-							 0.1f, 0.1f, 1.0f, 1.0f, 0.1f, 0.1f, 1.0f, 0.1f, 0.1f, 0.02f, 1.0f, 0.02f,
-							 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
-	int g_page = 0;
+	//  One row per option the running technique reads, in this order - no
+	//  pages. The focus distance and the aperture are not among them: a Custom
+	//  keyframe's own Focal Distance and Intensity rows are those. The game's
+	//  column draws 16 rows, so the list scrolls: down on its last row brings
+	//  the next option in, up on its first brings the one before back.
+	const int kListManual[] = { 12, 14, I_NEAR, I_NEARPOWER, 11, 17, 18, 20, 22, 21, 13, 15, 19, 16 };
+	const int kListAuto[]   = { 12, 14, I_NEAR, I_AUTO_NEARPOWER, 11, 17, 18, 7, 8, 9, 10, 20, 22, 21, 13, 15, 19, 16 };
+	constexpr int kListMax = (int)(sizeof(kListAuto) / sizeof(kListAuto[0]));
+	int listCount() { return techAuto() ? kListMax : (int)(sizeof(kListManual) / sizeof(kListManual[0])); }
+	int listParam(int k)
+	{
+		if (k < 0 || k >= listCount()) return -1;
+		return techAuto() ? kListAuto[k] : kListManual[k];
+	}
+	int g_scroll = 0;                     // the first option shown
 
-	int pageRows()        { return kPages[g_page].n; }
-	int pageParam(int r)  { return (r >= 0 && r < kPages[g_page].n) ? kPages[g_page].p[r] : -1; }
-	const char* pageName() { return kPages[g_page].name; }
-	void nextPage(int d)  { g_page = (g_page + d + kPageCount) % kPageCount; }
+	// One press of left or right. 0 = this option moves by 10% of itself a
+	// press, so it covers small values and large ones alike. Held, a press
+	// counts several times (the menu's hold acceleration, ecs_menu.inc).
+	const float kStep[N] = { 1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.5f, 0.01f, 0.01f,
+							 0.5f, 0.05f, 1.0f, 0.5f, 0.05f, 0.05f, 1.0f, 0.05f, 0.05f, 0.01f, 1.0f, 0.01f,
+							 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
 
 	bool markerTimeNow(float* t)
 	{
@@ -616,17 +695,24 @@ namespace enbdof
 		return w.v[p];
 	}
 
+	// `delta` is +-1 a press, more while it is held.
 	float stepped(int p, float cur, int delta)
 	{
 		const Def& d = kDefs[p];
 		float v;
 		if (d.kind == K_BOOL) v = cur > 0.5f ? 0.0f : 1.0f;
-		else if (p == I_DIST) v = delta > 0 ? cur * 1.15f + 0.05f : cur / 1.15f - 0.05f;
+		else if (kStep[p] == 0.0f)
+		{
+			const float small = (d.hi - d.lo) * 0.0005f;    // where 10% of itself stops meaning anything
+			const float f = powf(1.1f, (float)(delta > 0 ? delta : -delta));
+			if (delta > 0) v = cur < d.lo + small ? d.lo + small : cur * f;
+			else { v = cur / f; if (v < d.lo + small) v = d.lo; }
+		}
 		else v = cur + kStep[p] * (float)delta;
 		if (v < d.lo) v = d.lo;
 		if (v > d.hi) v = d.hi;
 		if (d.kind == K_INT) v = floorf(v + 0.5f);
-		else if (d.kind == K_FLOAT) v = floorf(v * 1000.0f + 0.5f) / 1000.0f;
+		else if (d.kind == K_FLOAT) v = floorf(v * 10000.0f + 0.5f) / 10000.0f;
 		return v;
 	}
 
@@ -661,8 +747,36 @@ namespace enbdof
 		if (d.kind == K_BOOL) return v > 0.5f ? "On" : "Off";
 		if (d.kind == K_INT) { snprintf(buf, cap, "%d", (int)floorf(v + 0.5f)); return buf; }
 		if (p == I_DIST) { snprintf(buf, cap, v < 10.0f ? "%.2f m" : "%.1f m", v); return buf; }
-		snprintf(buf, cap, "%.2f", v);
+		snprintf(buf, cap, v < 1.0f ? "%.3f" : v < 100.0f ? "%.2f" : "%.1f", v);
 		return buf;
+	}
+
+	// One line on what an option does, for the help line under the column.
+	const char* hint(int p)
+	{
+		switch (p)
+		{
+		case I_NEAR:            return "Blur what is closer than the focus too.";
+		case I_NEARPOWER:
+		case I_AUTO_NEARPOWER:  return "Higher = less blur in front of the focus.";
+		case 7:  return "How fast the auto-focus follows.";
+		case 8:  return "Makes the auto-focus reach further.";
+		case 9:  return "Where the auto-focus looks, left to right.";
+		case 10: return "Where the auto-focus looks, top to bottom.";
+		case 11: return "Colour fringes in the blur.";
+		case 12: return "How big the blur is.";
+		case 13: return "More steps, smoother blur, slower.";
+		case 14: return "The largest the blur can get.";
+		case 15: return "Bokeh quality.";
+		case 16: return "Lower renders the blur at less resolution - faster.";
+		case 17: return "Oval bokeh, like an anamorphic lens.";
+		case 18: return "How oval.";
+		case 19: return "How the blur spreads between near and far.";
+		case 20: return "Barrel distortion of the lens.";
+		case 21: return "Zoom in so the distortion shows no edges.";
+		case 22: return "How far it zooms.";
+		default: return "";
+		}
 	}
 
 	// From the worker, about once a second.
@@ -684,6 +798,8 @@ namespace enbdof
 		}
 		if (!s_ready) { calibrate(); return; }
 		if (!g_cfg.enbDof) rereadBase();
+		static ULONGLONG s_nextTech = 0;
+		if (now >= s_nextTech) { s_nextTech = now + 3000; readTechnique(); }   // it can be switched in ENB's window
 	}
 
 	void setOn(bool on)

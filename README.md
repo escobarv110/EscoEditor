@@ -9,7 +9,7 @@ place in the picture with a 3D gizmo and key over the clip**.
 No ScriptHookV, no Rockstar Editor+, no Menyoo. One `.asi`, and it runs
 alongside Rockstar Editor+ if you use that too.
 
-<sub>Version 4.9 · GTA V b3258–b3751 and singleplayer b3407 · MIT</sub>
+<sub>Version 4.10 · GTA V b3258–b3751 and singleplayer b3407 · MIT</sub>
 
 ---
 
@@ -39,15 +39,17 @@ alongside Rockstar Editor+ if you use that too.
 
 * With **ENBSeries** in the game (its `d3d11.dll` exports an SDK) and ENB's
   `EnableDepthOfField` on, the **ENB** switch hands ENB's `enbdepthoffield.fx`
-  the Rockstar Editor's own depth of field, keyframe by keyframe: Custom with
-  manual focus sets ENB's focus distance, the intensity (1–10) times a scale
-  sets the aperture, None means no blur, Default leaves ENB alone — blended
-  from one keyframe to the next.
+  the Rockstar Editor's own depth of field, keyframe by keyframe: a Custom
+  keyframe's Focal Distance is where ENB focuses (in metres — converted to
+  NVE's own unit), its Intensity decides how quickly the blur comes in
+  (100% = NVE's own aperture), None means no blur, Default leaves ENB's focus
+  alone — blended from one keyframe to the next.
 * **Every ENB DOF option, per keyframe**, right in the keyframe's own Depth of
-  Field menu: an *ENB Options* row picks a page (Focus, Blur, Near field,
-  Anamorphic, Quality, Auto-focus, Lens) and its rows are that keyframe's
-  values. Each option blends between the keyframes that set it; a keyframe that
-  sets only its blur size leaves the focus to the game's own rows.
+  Field menu: one row each for every option the running NVE technique reads
+  (blur size, maximum blur, near field, chromatic spread, anamorphic, lens
+  distortion, quality…). The list scrolls past the column's 16 rows, and
+  holding left/right speeds up like the game's own sliders. Each option
+  blends between the keyframes that set it.
 * Values go in from ENB's own per-frame callback, only when they change, and
   ENB's own values go back when the switch is off and before ENB saves, so its
   `.ini` keeps yours.

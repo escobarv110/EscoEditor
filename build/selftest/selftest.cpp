@@ -588,37 +588,57 @@ int main(int argc, char** argv)
               "the options the Rockstar Editor drives are ENB's exact UI names");
 
         float v[ed::N] = {};
-        v[ed::I_DIST] = 7.0f; v[ed::I_APERTURE] = 0.5f; v[ed::I_AUTO_APERTURE] = 0.5f;
+        v[ed::I_DIST] = 7.0f; v[ed::I_APERTURE] = 0.5f; v[ed::I_AUTO_APERTURE] = 0.5f; v[ed::I_MOUSE] = 1.0f;
         ed::EdDof a = {}, b = {};
-        a.have = true; a.mode = dof::MODE_CUSTOM; a.focus = dof::FOCUS_MANUAL; a.dist = 4.0f;  a.intensity = 2.0f;  a.t = 0.0f;
-        b.have = true; b.mode = dof::MODE_CUSTOM; b.focus = dof::FOCUS_MANUAL; b.dist = 12.0f; b.intensity = 10.0f; b.t = 1000.0f;
-        ed::applyEditor(a, b, 0.0f, 0.25f, v, nullptr, 0);
-        CHECK(fabsf(v[ed::I_DIST] - 4.0f) < 1e-4f && fabsf(v[ed::I_APERTURE] - 0.5f) < 1e-4f,
-              "a Custom keyframe with manual focus: its distance, and intensity 2 x 0.25 = aperture 0.5 (%.2f m, %.2f)",
+        a.have = true; a.mode = dof::MODE_CUSTOM; a.focus = dof::FOCUS_MANUAL; a.dist = 4.0f;  a.intensity = 50.0f;  a.t = 0.0f;
+        b.have = true; b.mode = dof::MODE_CUSTOM; b.focus = dof::FOCUS_MANUAL; b.dist = 12.0f; b.intensity = 100.0f; b.t = 1000.0f;
+        ed::applyEditor(a, b, 0.0f, 1.0f, v, nullptr, 0);
+        CHECK(fabsf(v[ed::I_DIST] - 4.0f) < 1e-4f && fabsf(v[ed::I_APERTURE] - 0.125f) < 1e-5f && v[ed::I_MOUSE] == 0.0f,
+              "a Custom keyframe: focus at its 4 m, intensity 50%% = aperture 0.125, mouse focus off (%.2f m, %.4f)",
               v[ed::I_DIST], v[ed::I_APERTURE]);
-        ed::applyEditor(a, b, 500.0f, 0.25f, v, nullptr, 0);
-        CHECK(fabsf(v[ed::I_DIST] - 8.0f) < 1e-4f && fabsf(v[ed::I_APERTURE] - 1.5f) < 1e-4f && fabsf(v[ed::I_AUTO_APERTURE] - 1.5f) < 1e-4f,
-              "halfway to the next keyframe it blends: 8 m, aperture 1.5 (%.2f m, %.2f)", v[ed::I_DIST], v[ed::I_APERTURE]);
+        ed::applyEditor(a, b, 500.0f, 1.0f, v, nullptr, 0);
+        CHECK(fabsf(v[ed::I_DIST] - 8.0f) < 1e-4f && fabsf(v[ed::I_APERTURE] - 0.28125f) < 1e-5f && fabsf(v[ed::I_AUTO_APERTURE] - 0.28125f) < 1e-5f,
+              "halfway to the next keyframe it blends: 8 m, 75%% = aperture 0.281 (%.2f m, %.4f)", v[ed::I_DIST], v[ed::I_APERTURE]);
+        ed::applyEditor(b, b, 1000.0f, 1.0f, v, nullptr, 0);
+        CHECK(fabsf(v[ed::I_APERTURE] - 0.5f) < 1e-5f, "100%% is NVE's own aperture, 0.5 (%.3f)", v[ed::I_APERTURE]);
 
         ed::EdDof none = a;
         none.mode = dof::MODE_NONE;
-        ed::applyEditor(none, b, 0.0f, 0.25f, v, nullptr, 0);
+        ed::applyEditor(none, b, 0.0f, 1.0f, v, nullptr, 0);
         CHECK(v[ed::I_APERTURE] == 0.0f && v[ed::I_AUTO_APERTURE] == 0.0f, "a keyframe set to None means no blur");
 
         float keep[ed::N] = {};
         keep[ed::I_DIST] = 7.0f; keep[ed::I_APERTURE] = 0.5f;
         ed::EdDof def = a;
         def.mode = dof::MODE_DEFAULT;
-        ed::applyEditor(def, b, 0.0f, 0.25f, keep, nullptr, 0);
-        CHECK(keep[ed::I_DIST] == 7.0f && keep[ed::I_APERTURE] == 0.5f, "a Default keyframe leaves ENB's values alone");
+        ed::applyEditor(def, b, 0.0f, 1.0f, keep, nullptr, 0);
+        CHECK(keep[ed::I_DIST] == 7.0f && keep[ed::I_APERTURE] == 0.5f, "a Default keyframe leaves ENB's focus and aperture alone");
 
         ed::EdDof autoF = a;
         autoF.focus = dof::FOCUS_AUTO;
         float af[ed::N] = {};
         af[ed::I_DIST] = 7.0f;
-        ed::applyEditor(autoF, b, 0.0f, 0.25f, af, nullptr, 0);
-        CHECK(af[ed::I_DIST] == 7.0f && fabsf(af[ed::I_APERTURE] - 0.5f) < 1e-4f,
-              "auto focus: the strength follows, the focus distance is left to ENB");
+        ed::applyEditor(autoF, autoF, 0.0f, 1.0f, af, nullptr, 0);
+        CHECK(af[ed::I_DIST] == 4.0f && fabsf(af[ed::I_APERTURE] - 0.125f) < 1e-5f,
+              "auto focus: NVE's Manual technique cannot measure one, so the keyframe's own focal distance is used");
+
+        // NVE's Distance is not metres: the plane in focus is Distance^2 x near x (1 - near / z)
+        {
+            const float n = 0.1f;
+            CHECK(fabsf(ed::metresOf(7.0f, n) - 4.798f) < 0.01f, "NVE's own 7.0 focuses at about 4.8 m (%.3f)", ed::metresOf(7.0f, n));
+            bool round = true;
+            const float ms[] = { 0.5f, 1.0f, 4.9f, 38.9f, 51.6f, 300.0f, 1500.0f };
+            for (float m : ms)
+            {
+                const float d = ed::enbDistance(m, n);
+                const float depth = n / m;                                       // GTA's reversed depth there
+                const float focus = 1.0f - 1.0f / (d * d * depth);               // what NVE's manual pass computes
+                if (fabsf(ed::metresOf(d, n) - m) > m * 1e-3f || fabsf(focus - depth) > 1e-4f) round = false;
+            }
+            CHECK(round, "metres -> NVE's Distance -> metres round trip, and NVE's own formula puts the focus exactly there");
+            CHECK(ed::enbDistance(51.6f, n) < 23.0f && ed::metresOf(51.6f, n) > 250.0f,
+                  "a keyframe's 51.6 m is NVE's %.1f - sent as it was until 4.9 it focused at %.0f m", ed::enbDistance(51.6f, n), ed::metresOf(51.6f, n));
+        }
 
         // every ENB option keyed over the clip
         lights::EnbTrack tr = {};
@@ -635,28 +655,32 @@ int main(int argc, char** argv)
         lights::evalEnb(tr, 1000.0f, out, ed::kinds);
         CHECK(out[17] == 0.0f, "at the next key the switch changes");
 
-        // NVE's section switches: exact names, and the keyframe's focus mode runs them
+        // NVE's six "-----" lines are labels the shader never reads; the menu's flat list
         {
-            CHECK(!strcmp(ed::kDefs[ed::I_SEC_MANUAL].ui, "-------------------------- Manual DOF -------------------------") &&
-                  !strcmp(ed::kDefs[ed::I_SEC_AUTO].ui, "-------------------------- Auto-focus DOF ---------------------"),
-                  "the Manual DOF and Auto-focus DOF switches carry ENB's exact names, dashes and all");
-            ed::EdDof m = {};
-            m.have = true; m.mode = dof::MODE_CUSTOM; m.focus = dof::FOCUS_MANUAL; m.dist = 5.0f; m.intensity = 4.0f;
-            float sw[ed::N] = {};
-            ed::applyEditor(m, m, 0.0f, 0.25f, sw, nullptr, 0);
-            CHECK(sw[ed::I_SEC_MANUAL] == 1.0f && sw[ed::I_SEC_AUTO] == 0.0f, "manual focus runs NVE's Manual DOF, not its auto-focus");
-            ed::EdDof au = m;
-            au.focus = dof::FOCUS_AUTO;
-            ed::applyEditor(au, au, 0.0f, 0.25f, sw, nullptr, 0);
-            CHECK(sw[ed::I_SEC_MANUAL] == 0.0f && sw[ed::I_SEC_AUTO] == 1.0f, "auto focus runs Auto-focus DOF");
-            ed::EdDof off = m;
-            off.mode = dof::MODE_NONE;
-            ed::applyEditor(off, off, 0.0f, 0.25f, sw, nullptr, 0);
-            CHECK(sw[ed::I_SEC_MANUAL] == 0.0f && sw[ed::I_SEC_AUTO] == 0.0f, "None runs neither");
-            float mine[ed::N] = {};
-            mine[ed::I_SEC_AUTO] = 1.0f;
-            ed::applyEditor(m, m, 0.0f, 0.25f, mine, nullptr, 0, 1u << ed::I_SEC_AUTO);
-            CHECK(mine[ed::I_SEC_AUTO] == 1.0f && mine[ed::I_SEC_MANUAL] == 1.0f, "a switch the keyframe set itself is left alone");
+            bool labels = true;
+            for (int i = ed::I_SEC_NEAR; i <= ed::I_SEC_MISC; ++i) if (!ed::isLabel(i)) labels = false;
+            for (int i = 0; i < ed::I_SEC_NEAR; ++i) if (ed::isLabel(i)) labels = false;
+            CHECK(labels, "the six separator lines are labels, never sent to ENB; the 23 real options are not");
+            ed::s_tech = ed::TECH_MANUAL;
+            bool listOk = ed::listCount() == 14;
+            for (int k = 0; k < ed::listCount(); ++k)
+            {
+                const int q = ed::listParam(k);
+                if (q < 0 || ed::isLabel(q) || q == ed::I_DIST || q == ed::I_APERTURE || q == ed::I_AUTO_APERTURE || q == ed::I_MOUSE) listOk = false;
+                if (q >= 6 && q <= 10) listOk = false;                     // auto-focus options: the Manual technique never reads them
+            }
+            CHECK(listOk && ed::listParam(14) == -1, "Manual technique: 14 rows, none the Manual pass ignores, focus and aperture left to the game's rows");
+            ed::s_tech = ed::TECH_AUTO;
+            bool autoOk = ed::listCount() == 18;
+            for (int k = 0; k < ed::listCount(); ++k) if (ed::listParam(k) == ed::I_NEARPOWER) autoOk = false;
+            CHECK(autoOk, "Auto-focus technique: its own near field power and auto-focus options instead");
+            ed::s_tech = -1;
+            CHECK(fabsf(ed::stepped(ed::I_NEARPOWER, 20.0f, 1) - 22.0f) < 1e-3f && ed::stepped(ed::I_NEARPOWER, 0.0f, 1) == 0.5f &&
+                  ed::stepped(ed::I_NEARPOWER, 0.4f, -1) == 0.0f,
+                  "near field power moves by 10%% of itself, starts from 0 and gets back to 0");
+            CHECK(fabsf(ed::stepped(12, 1.0f, 4) - 1.2f) < 1e-4f && ed::stepped(12, 1.9f, 8) == 2.0f && ed::stepped(13, 6.0f, -8) == 1.0f,
+                  "held, a press counts several times and stops at the shader's own limits");
+            CHECK(fabsf(ed::stepped(ed::I_NEARPOWER, 20.0f, 4) - 20.0f * powf(1.1f, 4.0f)) < 0.01f, "held on a 10%% option, 4 presses in one");
 
             // a 4.9 key: 29 options, and a mask above 2^24 that a float could not hold
             namespace lt = lights;
@@ -723,14 +747,15 @@ int main(int argc, char** argv)
             ed::EdDof ca = {};
             ca.have = true; ca.mode = dof::MODE_CUSTOM; ca.focus = dof::FOCUS_MANUAL; ca.dist = 4.0f; ca.intensity = 6.0f;
             ap[ed::I_APERTURE] = 2.2f;
-            ed::applyEditor(ca, ca, 0.0f, 0.25f, ap, nullptr, 0, 1u << ed::I_APERTURE);
-            CHECK(ap[ed::I_APERTURE] == 2.2f && ap[ed::I_DIST] == 4.0f,
-                  "an aperture the keyframe set itself wins over the game's intensity; the focus still follows the game");
+            ca.intensity = 100.0f;
+            ed::applyEditor(ca, ca, 0.0f, 1.0f, ap, nullptr, 0, 1u << ed::I_APERTURE);
+            CHECK(fabsf(ap[ed::I_APERTURE] - 0.5f) < 1e-5f && ap[ed::I_DIST] == 4.0f,
+                  "a Custom keyframe's Intensity row is the aperture, over an old key's 2.2 (%.3f)", ap[ed::I_APERTURE]);
             ed::EdDof pct = ca;
-            pct.intensity = 0.5f;                         // shown as 50% in the game's menu
+            pct.intensity = 0.5f;                         // a fraction: 50%
             float pv[ed::N] = {};
-            ed::applyEditor(pct, pct, 0.0f, 0.25f, pv, nullptr, 0);
-            CHECK(fabsf(pv[ed::I_APERTURE] - 1.25f) < 1e-4f, "an intensity stored as 0..1 is read as its 1..10 step (%.2f)", pv[ed::I_APERTURE]);
+            ed::applyEditor(pct, pct, 0.0f, 2.0f, pv, nullptr, 0);
+            CHECK(fabsf(pv[ed::I_APERTURE] - 0.25f) < 1e-5f, "an intensity stored as 0..1 is a fraction, and the strength multiplies (%.3f)", pv[ed::I_APERTURE]);
             lights::clearEnbParam(mt, 1000.0f, 12);
             CHECK(mt.n == 0, "handing its only option back removes the keyframe's key");
         }
