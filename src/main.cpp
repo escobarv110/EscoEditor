@@ -82,6 +82,7 @@ namespace
 #include "ecs_scene.inc"
 #include "ecs_dof.inc"
 #include "ecs_lights.inc"
+#include "ecs_enbdof.inc"
 #include "ecs_lightui.inc"
 #include "ecs_reshade.inc"
 #include "ecs_menu.inc"

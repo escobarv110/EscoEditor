@@ -9,7 +9,7 @@ place in the picture with a 3D gizmo and key over the clip**.
 No ScriptHookV, no Rockstar Editor+, no Menyoo. One `.asi`, and it runs
 alongside Rockstar Editor+ if you use that too.
 
-<sub>Version 4.5 · GTA V b3258–b3751 and singleplayer b3407 · MIT</sub>
+<sub>Version 4.6 · GTA V b3258–b3751 and singleplayer b3407 · MIT</sub>
 
 ---
 
@@ -34,6 +34,21 @@ alongside Rockstar Editor+ if you use that too.
 * **Copy / Paste / To All** for the whole Depth of Field block of a keyframe.
 * **Speed To All** - the speed of the keyframe whose menu is open goes onto
   every keyframe of the clip, so a whole sequence is set from one place.
+
+**ENB depth of field**
+
+* With **ENBSeries** in the game (its `d3d11.dll` exports an SDK) and ENB's
+  `EnableDepthOfField` on, the **ENB** switch hands ENB's `enbdepthoffield.fx`
+  the Rockstar Editor's own depth of field, keyframe by keyframe: Custom with
+  manual focus sets ENB's focus distance, the intensity (1–10) times a scale
+  sets the aperture, None means no blur, Default leaves ENB alone — blended
+  from one keyframe to the next.
+* **Every ENB DOF option** — near field, blur size and quality, anamorphic,
+  lens distortion and the rest — can be set for the session or **keyed over the
+  clip**.
+* Values go in from ENB's own per-frame callback, only when they change, and
+  ENB's own values go back when the switch is off and before ENB saves, so its
+  `.ini` keeps yours.
 
 **Scene lights** — the big one
 
@@ -126,7 +141,7 @@ build\selftest\selftest.bat   :: builds the self-test
 build\selftest\selftest.exe            :: a cameras.ymt may be passed, but is not needed
 ```
 
-The self-test is 145 checks over the parts that can run outside the game: the
+The self-test is 155 checks over the parts that can run outside the game: the
 metadata parser, the light record, keyframe interpolation, the light file
 format, the entity pools, the marker clipboard, Free Look's snapshots, MinHook
 itself. It prints `SELFTEST: all checks passed` or the first thing that broke.
@@ -144,6 +159,7 @@ One translation unit — `src/main.cpp` includes the `.inc` files in order:
 | `ecs_scene.inc` | time of day and weather |
 | `ecs_dof.inc` | depth of field copy / paste / to all |
 | `ecs_lights.inc` | the lights themselves: store, keyframes, records, pools |
+| `ecs_enbdof.inc` | the ENB option: the editor's DOF drawn by ENB through its SDK |
 | `ecs_lightui.inc` | the light editor window and the 3D gizmo |
 | `ecs_reshade.inc` | registering as a ReShade add-on; drawing the flares |
 | `ecs_menu.inc` | the rows in the marker menu |

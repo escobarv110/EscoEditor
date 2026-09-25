@@ -1,4 +1,4 @@
-EscoEditor.asi 4.5  -  more control for the Rockstar Editor
+EscoEditor.asi 4.6  -  more control for the Rockstar Editor
 ======================================================================
 (formerly EditorCamSpeed.asi - same plugin, new name)
 
@@ -9,6 +9,21 @@ menu, adds scene lights you place in the picture with a 3D gizmo - fixed in
 the world, on the camera, or riding along with a ped, a vehicle or a prop -
 and keeps the free camera speed keys. The editor's own camera path,
 transitions, shake and depth of field are never touched.
+
+WHAT CHANGED IN 4.6
+  - ENB: the Rockstar Editor's depth of field, drawn by ENB. With ENBSeries in
+    the game (its d3d11.dll exports an SDK) and EnableDepthOfField on, the ENB
+    row at the bottom of the Depth of Field menu - or the ENB depth of field
+    section of the light editor - hands ENB's enbdepthoffield.fx the clip:
+      each keyframe's own DOF - Custom with manual focus sets ENB's focus
+      distance, its intensity (1 to 10) times a scale sets the aperture, None
+      means no blur, Default leaves ENB alone - blended from keyframe to
+      keyframe;
+      every ENB DOF option (near field, blur size, quality, anamorphic, lens
+      distortion and the rest) set for the session, or keyed over the clip.
+    Values go in from ENB's own per-frame callback and only when they change.
+    ENB's own values are put back when the option is off, and before ENB
+    saves its settings, so enbdepthoffield.fx.ini keeps yours.
 
 WHAT CHANGED IN 4.5
   - Lights in an export, whatever is driving it. The list handed to the game
@@ -346,7 +361,7 @@ WHAT CHANGED IN 2.9
 
 CHECK YOU HAVE THIS VERSION
   The first line of EscoEditor.log (next to the .asi) must say
-  "EscoEditor 4.5".
+  "EscoEditor 4.6".
 
 INSTALL
   FiveM:          close FiveM, run Install.bat - or copy EscoEditor.asi

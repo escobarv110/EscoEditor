@@ -577,6 +577,80 @@ int main(int argc, char** argv)
         CHECK(err < 1e-4f && rq::encode(rq::decode(packed)) == packed, "quaternion round trip");
     }
 
+    // ---- the ENB option: the Rockstar Editor's DOF, drawn by ENB ----------------
+    {
+        namespace ed = enbdof;
+        for (int i = 0; i < ed::N; ++i) ed::kinds[i] = (uint8_t)ed::kDefs[i].kind;
+        CHECK(!strcmp(ed::kDefs[ed::I_DIST].ui, "--> Manual Focus : Distance") &&
+              !strcmp(ed::kDefs[ed::I_APERTURE].ui, "--> Manual Focus : Aperture") &&
+              !strcmp(ed::kDefs[ed::I_AUTO_APERTURE].ui, "--> Auto-focus : Aperture"),
+              "the options the Rockstar Editor drives are ENB's exact UI names");
+
+        float v[ed::N] = {};
+        v[ed::I_DIST] = 7.0f; v[ed::I_APERTURE] = 0.5f; v[ed::I_AUTO_APERTURE] = 0.5f;
+        ed::EdDof a = {}, b = {};
+        a.have = true; a.mode = dof::MODE_CUSTOM; a.focus = dof::FOCUS_MANUAL; a.dist = 4.0f;  a.intensity = 2.0f;  a.t = 0.0f;
+        b.have = true; b.mode = dof::MODE_CUSTOM; b.focus = dof::FOCUS_MANUAL; b.dist = 12.0f; b.intensity = 10.0f; b.t = 1000.0f;
+        ed::applyEditor(a, b, 0.0f, 0.25f, v, nullptr, 0);
+        CHECK(fabsf(v[ed::I_DIST] - 4.0f) < 1e-4f && fabsf(v[ed::I_APERTURE] - 0.5f) < 1e-4f,
+              "a Custom keyframe with manual focus: its distance, and intensity 2 x 0.25 = aperture 0.5 (%.2f m, %.2f)",
+              v[ed::I_DIST], v[ed::I_APERTURE]);
+        ed::applyEditor(a, b, 500.0f, 0.25f, v, nullptr, 0);
+        CHECK(fabsf(v[ed::I_DIST] - 8.0f) < 1e-4f && fabsf(v[ed::I_APERTURE] - 1.5f) < 1e-4f && fabsf(v[ed::I_AUTO_APERTURE] - 1.5f) < 1e-4f,
+              "halfway to the next keyframe it blends: 8 m, aperture 1.5 (%.2f m, %.2f)", v[ed::I_DIST], v[ed::I_APERTURE]);
+
+        ed::EdDof none = a;
+        none.mode = dof::MODE_NONE;
+        ed::applyEditor(none, b, 0.0f, 0.25f, v, nullptr, 0);
+        CHECK(v[ed::I_APERTURE] == 0.0f && v[ed::I_AUTO_APERTURE] == 0.0f, "a keyframe set to None means no blur");
+
+        float keep[ed::N] = {};
+        keep[ed::I_DIST] = 7.0f; keep[ed::I_APERTURE] = 0.5f;
+        ed::EdDof def = a;
+        def.mode = dof::MODE_DEFAULT;
+        ed::applyEditor(def, b, 0.0f, 0.25f, keep, nullptr, 0);
+        CHECK(keep[ed::I_DIST] == 7.0f && keep[ed::I_APERTURE] == 0.5f, "a Default keyframe leaves ENB's values alone");
+
+        ed::EdDof autoF = a;
+        autoF.focus = dof::FOCUS_AUTO;
+        float af[ed::N] = {};
+        af[ed::I_DIST] = 7.0f;
+        ed::applyEditor(autoF, b, 0.0f, 0.25f, af, nullptr, 0);
+        CHECK(af[ed::I_DIST] == 7.0f && fabsf(af[ed::I_APERTURE] - 0.5f) < 1e-4f,
+              "auto focus: the strength follows, the focus distance is left to ENB");
+
+        // every ENB option keyed over the clip
+        lights::EnbTrack tr = {};
+        float k0[ed::N] = {}, k1[ed::N] = {};
+        k0[ed::I_DIST] = 5.0f;  k1[ed::I_DIST] = 15.0f;     // a float
+        k0[13] = 4.0f;          k1[13] = 9.0f;              // Blur : Quality Steps, a whole number
+        k0[17] = 1.0f;          k1[17] = 0.0f;              // Anamorphic enable, a switch
+        CHECK(lights::addEnbKey(tr, 0.0f, k0) == 0 && lights::addEnbKey(tr, 1000.0f, k1) == 1 && tr.n == 2, "ENB keys go in");
+        float out[ed::N] = {};
+        lights::evalEnb(tr, 500.0f, out, ed::kinds);
+        CHECK(fabsf(out[ed::I_DIST] - 10.0f) < 1e-4f && out[13] == 7.0f && out[17] == 1.0f,
+              "between keys: floats blend (%.2f), whole numbers round (%.0f), switches hold until the next key (%.0f)",
+              out[ed::I_DIST], out[13], out[17]);
+        lights::evalEnb(tr, 1000.0f, out, ed::kinds);
+        CHECK(out[17] == 0.0f, "at the next key the switch changes");
+
+        // and they survive the lights file
+        {
+            namespace lt = lights;
+            lt::Lock lk;
+            lt::clearStore();
+            lt::LightSet* es = lt::findSet("ENBProj", 0, true);
+            es->enb = tr;
+            const std::string text = lt::serialize();
+            lt::clearStore();
+            lt::parse(text);
+            lt::LightSet* back = lt::findSet("ENBProj", 0, false);
+            CHECK(back && back->enb.n == 2 && fabsf(back->enb.k[1].v[ed::I_DIST] - 15.0f) < 1e-4f && back->enb.k[0].v[17] == 1.0f,
+                  "ENB keys are saved and read back with the clip");
+            lt::clearStore();
+        }
+    }
+
     // ---- time and weather keyed over a clip ---------------------------------
     {
         lights::SceneTrack sky = {};

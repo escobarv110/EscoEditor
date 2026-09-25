@@ -147,7 +147,55 @@ namespace lights
 	struct SceneKey { float t; int minutes; int weather; };
 	struct SceneTrack { int n; SceneKey k[kMaxSceneKeys]; };
 
-	struct LightSet { int count; uint32_t nextId; Light l[kMaxLights]; SceneTrack sky; };
+	// Every option of ENB's depth of field, keyed over the clip for the ENB
+	// option (ecs_enbdof.inc). Floats interpolate, whole numbers round, the
+	// switches change at the key.
+	constexpr int kEnbParams = 23, kMaxEnbKeys = 16;
+	struct EnbKey { float t; float v[kEnbParams]; };
+	struct EnbTrack { int n; EnbKey k[kMaxEnbKeys]; };
+
+	struct LightSet { int count; uint32_t nextId; Light l[kMaxLights]; SceneTrack sky; EnbTrack enb; };
+
+	// `kinds`: 0 a float, 1 a whole number, 2 a switch.
+	bool evalEnb(const EnbTrack& s, float t, float* out, const uint8_t* kinds)
+	{
+		if (s.n <= 0) return false;
+		int i = 0;
+		while (i < s.n - 1 && s.k[i + 1].t <= t) ++i;
+		const EnbKey& a = s.k[i];
+		const bool last = (i >= s.n - 1) || t <= a.t;
+		const EnbKey& b = last ? a : s.k[i + 1];
+		float u = 0.0f;
+		if (!last && b.t > a.t) u = (t - a.t) / (b.t - a.t);
+		if (u < 0.0f) u = 0.0f;
+		if (u > 1.0f) u = 1.0f;
+		for (int p = 0; p < kEnbParams; ++p)
+		{
+			const float x = a.v[p] + (b.v[p] - a.v[p]) * u;
+			out[p] = kinds[p] == 2 ? a.v[p] : kinds[p] == 1 ? floorf(x + 0.5f) : x;
+		}
+		return true;
+	}
+
+	int addEnbKey(EnbTrack& s, float t, const float* v)
+	{
+		for (int i = 0; i < s.n; ++i)
+			if (fabsf(s.k[i].t - t) <= 5.0f) { memcpy(s.k[i].v, v, sizeof(s.k[i].v)); return i; }
+		if (s.n >= kMaxEnbKeys) return -1;
+		int at = s.n;
+		while (at > 0 && s.k[at - 1].t > t) { s.k[at] = s.k[at - 1]; --at; }
+		s.k[at].t = t;
+		memcpy(s.k[at].v, v, sizeof(s.k[at].v));
+		++s.n;
+		return at;
+	}
+
+	void removeEnbKey(EnbTrack& s, int i)
+	{
+		if (i < 0 || i >= s.n) return;
+		for (int j = i; j < s.n - 1; ++j) s.k[j] = s.k[j + 1];
+		--s.n;
+	}
 
 	// Minutes from a to b the short way round the clock: 23:00 to 01:00 runs
 	// forwards through midnight, not backwards through the whole day.
@@ -1753,6 +1801,17 @@ namespace lights
 				appendParams(o, "b", nullptr, L.base);
 				for (int k = 0; k < L.nkeys; ++k) appendParams(o, "k", &L.keys[k].t, L.keys[k].p);
 			}
+			for (int k = 0; k < e.set->enb.n; ++k)
+			{
+				const EnbKey& q = e.set->enb.k[k];
+				std::string line = "e";
+				char num[32];
+				snprintf(num, sizeof(num), " %.9g", q.t);
+				line += num;
+				for (int p = 0; p < kEnbParams; ++p) { snprintf(num, sizeof(num), " %.9g", q.v[p]); line += num; }
+				o += line;
+				o += "\n";
+			}
 			for (int k = 0; k < e.set->sky.n; ++k)
 			{
 				const SceneKey& s = e.set->sky.k[k];
@@ -1821,6 +1880,12 @@ namespace lights
 				const char* sp = strchr(s + 6, ' ');
 				set = (sp && sp[1]) ? findSet(sp + 1, clip, true) : nullptr;
 				L = nullptr;
+				continue;
+			}
+			if (!strncmp(s, "e ", 2))
+			{
+				float g[1 + kEnbParams] = {};
+				if (set && parseSome(s + 2, g, 1 + kEnbParams) == 1 + kEnbParams) addEnbKey(set->enb, g[0], g + 1);
 				continue;
 			}
 			if (!strncmp(s, "t ", 2))

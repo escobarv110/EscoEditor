@@ -122,6 +122,7 @@ namespace director
 		if (g_rePlus && g_metaCount) applyAll(g_holdMul, GetTickCount64());
 		lights::onDirectorFrame((uint8_t*)self);
 		camfree::onFrame();
+		enbdof::fromGame();      // only when ENB is not calling back itself
 		menu::tick();
 	}
 

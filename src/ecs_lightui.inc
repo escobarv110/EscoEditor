@@ -872,6 +872,124 @@ namespace lightui
 		if (kill >= 0) { lights::removeSkyKey(S->sky, kill); lights::markDirty(); }
 	}
 
+	// ENB's depth of field, driven by the clip: the switch, how it follows the
+	// Rockstar Editor, every ENB DOF option, and keys over the clip.
+	void enbUi(const lights::Ctx* ctx)
+	{
+		if (!ImGui::CollapsingHeader("ENB depth of field")) return;
+		if (!enbdof::s_found)
+		{
+			ImGui::TextWrapped("ENBSeries with its SDK is not in the game (an ENB d3d11.dll exports ENBSetParameter). Without it there is nothing to drive.");
+			return;
+		}
+		if (!enbdof::s_ready)
+		{
+			ImGui::TextWrapped("ENB found (SDK %ld) - waiting for enbdepthoffield.fx to load. Turn EnableDepthOfField on in ENB's [EFFECT] section.", enbdof::s_sdk);
+			return;
+		}
+
+		bool on = g_cfg.enbDof;
+		if (ImGui::Checkbox("ENB", &on)) enbdof::setOn(on);
+		tip("On: ENB draws the depth of field, and it changes with the clip - every ENB DOF option below, keyed if you like, and the focus and strength of each Rockstar Editor keyframe.\n"
+			"Off: ENB's own settings are put back exactly as they were.\n"
+			"The same switch is the ENB row at the bottom of the Depth of Field menu. ENB's EnableDepthOfField has to be on.");
+
+		bool follow = g_cfg.enbFollow;
+		if (ImGui::Checkbox("Follow the Rockstar Editor DOF", &follow))
+		{
+			g_cfg.enbFollow = follow;
+			iniWriteInt("EnbDofFollow", follow ? 1 : 0);
+		}
+		tip("Each keyframe's own Depth of Field drives ENB, blended from one keyframe to the next:\n"
+			"Custom with manual focus sets the focus distance; its intensity (1 to 10) sets the aperture; None means no blur; Default leaves ENB's values alone.");
+		if (g_cfg.enbFollow)
+		{
+			ImGui::SetNextItemWidth(160.0f);
+			if (ImGui::DragFloat("Aperture per intensity step", &g_cfg.enbScale, 0.005f, 0.0f, 5.0f, "%.3f"))
+			{
+				char b[32];
+				snprintf(b, sizeof(b), "%.4f", g_cfg.enbScale);
+				WritePrivateProfileStringA(kSection, "EnbDofScale", b, g_ini);
+			}
+			tip("The keyframe's intensity times this is ENB's aperture: 0.25 makes intensity 2 an aperture of 0.5 and intensity 10 an aperture of 2.5.");
+			if (enbdof::s_editorLine[0]) ImGui::TextDisabled("Now: %s", enbdof::s_editorLine);
+		}
+
+		// every option, grouped the way ENB's own window groups them
+		ImGui::Spacing();
+		ImGui::TextDisabled("ENB's options for this clip (what a new key holds):");
+		for (int i = 0; i < enbdof::N; ++i)
+		{
+			const enbdof::Def& d = enbdof::kDefs[i];
+			if (!enbdof::s_known[i]) continue;
+			ImGui::PushID(2000 + i);
+			float& v = enbdof::s_manual[i];
+			if (d.kind == enbdof::K_BOOL)
+			{
+				bool b = v > 0.5f;
+				if (ImGui::Checkbox(d.label, &b)) v = b ? 1.0f : 0.0f;
+			}
+			else if (d.kind == enbdof::K_INT)
+			{
+				int n = (int)floorf(v + 0.5f);
+				if (ImGui::DragInt(d.label, &n, 0.1f, (int)d.lo, (int)d.hi)) v = (float)n;
+			}
+			else
+			{
+				const float speed = (d.hi - d.lo) > 50.0f ? 0.05f : 0.005f;
+				ImGui::DragFloat(d.label, &v, speed, d.lo, d.hi, "%.3f");
+			}
+			if (g_cfg.enbFollow && (i == enbdof::I_DIST || i == enbdof::I_APERTURE || i == enbdof::I_AUTO_APERTURE))
+				tip("Set by the Rockstar Editor keyframe while Follow is on (a Custom keyframe; focus distance only with manual focus).");
+			ImGui::PopID();
+		}
+		if (ImGui::Button("Back to ENB's own values"))
+			for (int i = 0; i < enbdof::N; ++i) enbdof::s_manual[i] = enbdof::s_base[i];
+		tip("Every option above back to what ENB had before - the values in its enbdepthoffield.fx.ini.");
+
+		// keys over the clip
+		lights::LightSet* S = ctx ? lights::cur() : nullptr;
+		if (!S) return;
+		ImGui::Separator();
+		bool atMarker = false;
+		const float kt = keyTime(*ctx, &atMarker);
+		bool anim = S->enb.n > 0;
+		if (ImGui::Checkbox("Animate ENB over the clip", &anim))
+		{
+			if (anim) lights::addEnbKey(S->enb, kt, enbdof::s_manual);
+			else      S->enb.n = 0;
+			lights::markDirty();
+		}
+		tip("On: every ENB option above is keyed over the clip and blends from key to key - the switches change at the key. The Rockstar Editor's focus and strength still win while Follow is on.");
+		if (S->enb.n <= 0) return;
+		ImGui::TextDisabled("Keys go in at the %s (%.2f s).", atMarker ? "open marker" : "playhead", kt / 1000.0f);
+		if (ImGui::Button("Key ENB here")) { lights::addEnbKey(S->enb, kt, enbdof::s_manual); lights::markDirty(); }
+		tip("Puts every ENB option above into a key at this moment. A key already here is replaced.");
+		ImGui::SameLine();
+		if (ImGui::Button("Clear ENB keys")) { S->enb.n = 0; lights::markDirty(); }
+		int kill = -1;
+		ImGui::BeginChild("##enbkeys", ImVec2(0.0f, 100.0f), ImGuiChildFlags_Border | ImGuiChildFlags_ResizeY);
+		for (int i = 0; i < S->enb.n; ++i)
+		{
+			const lights::EnbKey& k = S->enb.k[i];
+			ImGui::PushID(3000 + i);
+			ImGui::AlignTextToFramePadding();
+			char what[128];
+			snprintf(what, sizeof(what), "%6.2f s    focus %.2f m    aperture %.2f", k.t / 1000.0f,
+				k.v[enbdof::I_DIST], k.v[enbdof::I_APERTURE]);
+			if (fabsf(k.t - kt) <= 5.0f) ImGui::TextColored(kHotText, "%s   <- here", what);
+			else                         ImGui::TextUnformatted(what);
+			ImGui::SameLine();
+			if (ImGui::Button("Load")) memcpy(enbdof::s_manual, k.v, sizeof(k.v));
+			tip("Puts this key's values into the options above, to change and key again.");
+			ImGui::SameLine();
+			if (ImGui::Button("Delete")) kill = i;
+			ImGui::PopID();
+		}
+		ImGui::EndChild();
+		if (kill >= 0) { lights::removeEnbKey(S->enb, kill); lights::markDirty(); }
+	}
+
 	// The "EscoEditor Lights" window.
 	void panel(lights::LightSet& S, const lights::Ctx& c, bool haveCam)
 	{
@@ -977,6 +1095,7 @@ namespace lightui
 			ImGui::TextDisabled("Add a light, or click a dot in the picture.");
 			ImGui::Separator();
 			sceneUi(&c);
+			enbUi(&c);
 			shortcutUi(lights::CAP_WINDOW);
 			helpLine();
 			ImGui::End();
@@ -1196,6 +1315,7 @@ namespace lightui
 		}
 		ImGui::Separator();
 		sceneUi(&c);
+		enbUi(&c);
 		shortcutUi(lights::CAP_WINDOW);
 		helpLine();
 		ImGui::End();

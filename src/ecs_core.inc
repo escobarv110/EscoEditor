@@ -1,4 +1,4 @@
-	constexpr const char* kVersion = "4.5";
+	constexpr const char* kVersion = "4.6";
 
 	// ------------------------------------------------------------------ paths
 	char    g_dir[MAX_PATH]  = {};   // folder of the .asi, trailing backslash
@@ -46,6 +46,9 @@
 		int   keyLights = 0x4C;   // L
 		int   keyFreeLook = 0x4B; // K
 		bool  lightsAll = false;  // the lights of one clip are the lights of every clip
+		bool  enbDof = false;     // ENB draws the Rockstar Editor's depth of field
+		bool  enbFollow = true;   // ... following each keyframe's own DOF settings
+		float enbScale = 0.25f;   // aperture per step of the editor's intensity (1..10)
 	} g_cfg;
 
 	// When the left mouse button was last seen down (worker clock); the menu
@@ -209,9 +212,14 @@
 		g_cfg.keyLights = iniInt("KeyLights",       g_cfg.keyLights, 0, 0xFE);
 		g_cfg.keyFreeLook = iniInt("KeyFreeLook",   g_cfg.keyFreeLook, 0, 0xFE);
 		g_cfg.lightsAll = iniInt("LightsAllClips",  0, 0, 1) != 0;
+		g_cfg.enbDof    = iniInt("EnbDof",          0, 0, 1) != 0;
+		g_cfg.enbFollow = iniInt("EnbDofFollow",    1, 0, 1) != 0;
+		g_cfg.enbScale  = iniFloat("EnbDofScale",   0.25f, 0.0f, 5.0f);
 		g_logOn = g_cfg.log;
 		iniEnsureKey("KeyFreeLook", g_cfg.keyFreeLook);   // new in 3.9
 		iniEnsureInt("LightsAllClips", 0);                // new in 3.11
+		iniEnsureInt("EnbDof", 0);                        // new in 4.6
+		iniEnsureInt("EnbDofFollow", 1);
 		dropRetiredKeys();
 	}
 

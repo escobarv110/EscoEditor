@@ -220,6 +220,7 @@ DWORD WINAPI Worker(LPVOID)
 		}
 		scene::tick();
 		lights::tick(now);
+		enbdof::poll(now);
 
 		// --- keys -------------------------------------------------------
 		const bool live = inputLive() && !lights::g_uiOpen;   // typing in the light editor is not a speed key
