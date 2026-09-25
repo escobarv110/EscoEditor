@@ -115,6 +115,11 @@ namespace director
 		if (!self) return;
 		rd::g_lastDirector = (uint8_t*)self;
 		rescale((uint8_t*)self);
+		// After RE+'s own tick, which runs inside origUpdate above: the ramps,
+		// the look response and the mouse multiplier are written again here so
+		// the numbers on our rows are the ones the frame uses. Without this,
+		// whoever wrote last won - and that is RE+, every frame.
+		if (g_rePlus && g_metaCount) applyAll(g_holdMul, GetTickCount64());
 		lights::onDirectorFrame((uint8_t*)self);
 		camfree::onFrame();
 		menu::tick();

@@ -1,4 +1,4 @@
-	constexpr const char* kVersion = "4.1";
+	constexpr const char* kVersion = "4.2";
 
 	// ------------------------------------------------------------------ paths
 	char    g_dir[MAX_PATH]  = {};   // folder of the .asi, trailing backslash
@@ -432,6 +432,12 @@
 	// Rockstar Editor+ in the process. It hooks five of the same functions we
 	// do, and finds them by their first bytes.
 	bool rePlusLoaded() { return GetModuleHandleA("RockstarEditorPlus.asi") != nullptr; }
+
+	// Looked up once and kept, because the render thread asks every frame.
+	// Rockstar Editor Plus rewrites the free camera's response blocks from its
+	// own per-frame tick, so ours have to be written after its, every frame, or
+	// Look Speed and Response quietly do nothing.
+	bool g_rePlus = false;
 
 	// --------------------------------------------------------- game globals
 	// camReplayDirector::GetMaxDistanceAllowedFromPlayer opens with a compare

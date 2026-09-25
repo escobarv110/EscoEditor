@@ -90,7 +90,8 @@ DWORD WINAPI Worker(LPVOID)
 	if (globals)
 	{
 		game::resolve();
-		if (rePlusLoaded()) waitForRePlus();
+		g_rePlus = rePlusLoaded();
+		if (g_rePlus) waitForRePlus();
 		installModules();
 	}
 	if (!g_rescale)
@@ -170,8 +171,13 @@ DWORD WINAPI Worker(LPVOID)
 			if (n && !warnedRePlus)
 			{
 				warnedRePlus = true;
-				if (rePlusLoaded())
-					logf("note: Rockstar Editor+ is loaded. Everything else runs side by side, but the FREE CAMERA SPEED is written by both - leave one of them at 100%% (EscoEditor: Camera Speed 100%%, or Hotkeys=0 and Speed=100 in EscoEditor.ini).");
+				if (g_rePlus)
+					logf("note: Rockstar Editor+ is in the process and both plugins are live. EscoEditor has the free camera: "
+						 "the speed on its row is what the camera moves at (its correction is measured against whatever MaxSpeed "
+						 "currently holds, so RE+'s own speed is scaled away), and Look Speed, Response and the mouse multiplier "
+						 "are written again after RE+'s tick each frame. RE+ keeps its smooth blend, camera shake, exporter and "
+						 "its own rows; scene lights from both are drawn together. RE+'s own camera speed rows and keys will "
+						 "look like they do nothing - that is this arrangement, not a fault.");
 			}
 		}
 

@@ -9,7 +9,7 @@ place in the picture with a 3D gizmo and key over the clip**.
 No ScriptHookV, no Rockstar Editor+, no Menyoo. One `.asi`, and it runs
 alongside Rockstar Editor+ if you use that too.
 
-<sub>Version 4.1 · GTA V b3258–b3751 and singleplayer b3407 · MIT</sub>
+<sub>Version 4.2 · GTA V b3258–b3751 and singleplayer b3407 · MIT</sub>
 
 ---
 
@@ -89,9 +89,16 @@ happened lives in `EscoEditor.log` beside it.
 
 Both can be installed together. EscoEditor notices RE+ in the process, waits
 for it to install its own hooks and then goes in on top of them, so RE+'s menu,
-smooth blend, camera shake and exporter keep working. The one thing they cannot
-share is the **free camera speed** — both write it, so leave one of them at
-100%.
+smooth blend, camera shake and exporter keep working.
+
+The free camera belongs to EscoEditor when both are loaded. RE+ rewrites the
+camera's response blocks every frame from its own tick, so EscoEditor writes
+**Look Speed, Response and the mouse multiplier again after it**, once a frame,
+and the movement speed correction is measured against whatever `MaxSpeed`
+currently holds — so whatever RE+ puts there is scaled away and the camera moves
+at the percentage on EscoEditor's row. RE+'s own camera speed rows and keys will
+look like they do nothing; that is the arrangement, not a fault. Everything else
+runs side by side, and the scene lights of both plugins are drawn together.
 
 ## Build from source
 

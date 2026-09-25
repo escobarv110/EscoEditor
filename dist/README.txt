@@ -1,4 +1,4 @@
-EscoEditor.asi 4.1  -  more control for the Rockstar Editor
+EscoEditor.asi 4.2  -  more control for the Rockstar Editor
 ======================================================================
 (formerly EditorCamSpeed.asi - same plugin, new name)
 
@@ -9,6 +9,19 @@ menu, adds scene lights you place in the picture with a 3D gizmo - fixed in
 the world, on the camera, or riding along with a ped, a vehicle or a prop -
 and keeps the free camera speed keys. The editor's own camera path,
 transitions, shake and depth of field are never touched.
+
+WHAT CHANGED IN 4.2
+  - Both plugins now really do work together. Rockstar Editor Plus rewrites
+    the free camera's response blocks every frame from its own tick, so the
+    Look Speed, Response and mouse settings on EscoEditor's rows were being
+    overwritten and did nothing. They are now written again after RE+'s tick,
+    once a frame, so the numbers on the rows are the ones the frame uses.
+    (The movement speed was already ours: the correction is measured against
+    whatever MaxSpeed currently holds, so whatever RE+ writes there is scaled
+    away.)
+  - The log says what the arrangement is when both are loaded, and warns when
+    the marker menu column is full - the game draws 16 rows and no more, and
+    two plugins adding rows can reach that.
 
 WHAT CHANGED IN 4.1
   - "Speed To All" on the Copy & Paste page: the speed of the keyframe whose
@@ -284,7 +297,7 @@ WHAT CHANGED IN 2.9
 
 CHECK YOU HAVE THIS VERSION
   The first line of EscoEditor.log (next to the .asi) must say
-  "EscoEditor 4.1".
+  "EscoEditor 4.2".
 
 INSTALL
   FiveM:          close FiveM, run Install.bat - or copy EscoEditor.asi
@@ -483,9 +496,12 @@ WITH ROCKSTAR EDITOR+  (RockstarEditorPlus.asi)
     - starts its "EscoEditor" row Closed, because the game's marker menu draws
       only 16 rows and both plugins put rows there. Left/right on the row opens
       a page as usual; MenuPage in the ini still picks the page.
-  One thing they cannot share: the FREE CAMERA SPEED. Both write it, so leave
-  one of them at 100% - in EscoEditor either set Camera Speed to 100% or put
-  Hotkeys=0 and Speed=100 in EscoEditor.ini.
+  The free camera belongs to EscoEditor when both are loaded: the speed on
+  its row is what the camera moves at, and Look Speed, Response and the mouse
+  multiplier are written again after RE+'s own tick every frame. RE+'s camera
+  speed rows and keys will look like they do nothing - that is the
+  arrangement, not a fault. Everything else runs side by side, and the scene
+  lights of both plugins are drawn together.
 
 SPEED ROW (the game's own row in the marker menu)
   Left/right step 5% at a time, from 5% to 1000%. Playback and export use the
