@@ -749,7 +749,7 @@ namespace lightui
 	// mostly a question of which hour it is. Both last for the session only and
 	// are deliberately never saved, so a forgotten override cannot colour a
 	// later clip.
-	void sceneUi()
+	void sceneUi(const lights::Ctx* ctx)
 	{
 		if (!ImGui::CollapsingHeader("Time & weather")) return;
 		if (!scene::g_installed)
@@ -803,7 +803,73 @@ namespace lightui
 			}
 			tip("The sky, the clouds and the light of that weather. Rain and Thunder also wet the road; Foggy and Smog sit nicely behind a volumetric light.");
 		}
-		ImGui::TextDisabled("Both last for this session and are not saved.");
+		// ---- keyed over the clip, the way a light is ----------------------
+		lights::LightSet* S = ctx ? lights::cur() : nullptr;
+		if (!S)
+		{
+			ImGui::TextDisabled("Both last for this session and are not saved. Open a clip to key them over its length.");
+			return;
+		}
+
+		ImGui::Spacing();
+		ImGui::Separator();
+		bool atMarker = false;
+		const float kt = keyTime(*ctx, &atMarker);
+		bool anim = S->sky.n > 0;
+		if (ImGui::Checkbox("Animate over the clip", &anim))
+		{
+			if (anim) lights::addSkyKey(S->sky, kt, scene::g_time, scene::g_weather);
+			else      S->sky.n = 0;
+			lights::markDirty();
+			logf("scene: time and weather %s for clip %d of '%s'",
+				anim ? "keyed over the clip" : "back to one setting for the session",
+				lights::g_curClip + 1, lights::g_curProject);
+		}
+		tip("On: the clip carries its own time and weather, keyed over its length - sunset arriving across a shot, clear turning to thunder.\n"
+			"The time runs in minutes and takes the short way round midnight. The weather uses the game's own blend between one key and the next, so it does not step.\n"
+			"The keys are saved with the clip's lights, and Copy from brings them over with everything else.");
+
+		if (S->sky.n <= 0)
+		{
+			ImGui::TextDisabled("Not keyed: the two settings above hold for the whole session.");
+			return;
+		}
+
+		ImGui::TextDisabled("Keys go in at the %s (%.2f s). The two settings above are what a new key holds.",
+			atMarker ? "open marker" : "playhead", kt / 1000.0f);
+		if (ImGui::Button("Key here"))
+		{
+			lights::addSkyKey(S->sky, kt, scene::g_time, scene::g_weather);
+			lights::markDirty();
+		}
+		tip("Puts the time and the weather set above into a key at this moment. A key already at this moment is replaced.");
+		ImGui::SameLine();
+		if (ImGui::Button("Clear keys")) { S->sky.n = 0; lights::markDirty(); }
+		tip("Removes every key, leaving the two settings above to hold for the session.");
+
+		ImGui::BeginChild("##skykeys", ImVec2(0.0f, 120.0f), ImGuiChildFlags_Border | ImGuiChildFlags_ResizeY);
+		int kill = -1;
+		for (int i = 0; i < S->sky.n; ++i)
+		{
+			const lights::SceneKey& k = S->sky.k[i];
+			char hhmm[16] = "as recorded";
+			if (k.minutes >= 0) snprintf(hhmm, sizeof(hhmm), "%02d:%02d", k.minutes / 60, k.minutes % 60);
+			char what[128];
+			snprintf(what, sizeof(what), "%6.2f s    %s    %s", k.t / 1000.0f, hhmm,
+				(k.weather >= 0 && k.weather < scene::kWeatherCount) ? scene::kWeather[k.weather] : "weather as recorded");
+			ImGui::PushID(1000 + i);
+			ImGui::AlignTextToFramePadding();
+			if (fabsf(k.t - kt) <= 5.0f) ImGui::TextColored(kHotText, "%s   <- here", what);
+			else                         ImGui::TextUnformatted(what);
+			ImGui::SameLine();
+			ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
+			ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.78f, 0.20f, 0.20f, 0.90f));
+			if (ImGui::Button("Delete")) kill = i;
+			ImGui::PopStyleColor(2);
+			ImGui::PopID();
+		}
+		ImGui::EndChild();
+		if (kill >= 0) { lights::removeSkyKey(S->sky, kill); lights::markDirty(); }
 	}
 
 	// The "EscoEditor Lights" window.
@@ -910,7 +976,7 @@ namespace lightui
 		{
 			ImGui::TextDisabled("Add a light, or click a dot in the picture.");
 			ImGui::Separator();
-			sceneUi();
+			sceneUi(&c);
 			shortcutUi(lights::CAP_WINDOW);
 			helpLine();
 			ImGui::End();
@@ -1129,7 +1195,7 @@ namespace lightui
 			else ImGui::TextDisabled("One look for the whole clip. Tick Animate to key it per marker.");
 		}
 		ImGui::Separator();
-		sceneUi();
+		sceneUi(&c);
 		shortcutUi(lights::CAP_WINDOW);
 		helpLine();
 		ImGui::End();
@@ -1367,7 +1433,7 @@ namespace lightui
 			}
 		}
 		ImGui::Spacing();
-		sceneUi();
+		sceneUi(nullptr);
 		ImGui::Spacing();
 		shortcutUi(lights::CAP_RESHADE);
 	}

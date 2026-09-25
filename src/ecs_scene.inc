@@ -29,6 +29,27 @@ namespace scene
 	volatile int g_time    = -1;    // minutes since midnight, 0..1439
 	volatile int g_weather = -1;    // index into kWeather
 
+	// A clip with keys of its own drives these instead of the two rows above.
+	// Published once a frame by ecs_lights.inc, which owns the per-clip store
+	// and knows where the playhead is; read here, inside the packet hook.
+	// Stale after a second, so a clip that stops being played falls straight
+	// back to the fixed rows.
+	volatile int   g_animTime  = -1;     // minutes since midnight
+	volatile int   g_animFrom  = -1;     // weather blending from ...
+	volatile int   g_animTo    = -1;     // ... to
+	volatile float g_animBlend = 0.0f;   // 0 .. 1 between them
+	volatile LONGLONG g_animAt = 0;
+
+	bool animLive()
+	{
+		const ULONGLONG now = GetTickCount64();
+		const ULONGLONG at = (ULONGLONG)g_animAt;
+		return at && now >= at && now - at < 1000;
+	}
+
+	int animTime()    { return animLive() ? (int)g_animTime : -1; }
+	int animWeather() { return animLive() ? (int)g_animFrom : -1; }
+
 	constexpr unsigned kGuard = 0xAAAAAAAAu;
 	constexpr unsigned short kIdClock = 5, kIdWeather = 6;
 	constexpr int kClockSize = 20, kWeatherSize = 288;
@@ -119,7 +140,7 @@ namespace scene
 		s_clockPkt = nullptr;
 	}
 
-	bool overridesActive() { return g_installed && (g_time >= 0 || g_weather >= 0); }
+	bool overridesActive() { return g_installed && (g_time >= 0 || g_weather >= 0 || animTime() >= 0 || animWeather() >= 0); }
 
 	void extractBody(unsigned char* pkt)
 	{
@@ -130,7 +151,8 @@ namespace scene
 			origExtract(pkt);
 			return;
 		}
-		const int t = g_time;
+		const int anim = animTime();
+		const int t = anim >= 0 ? anim : g_time;     // a keyed clip wins over the row
 		if (t >= 0)
 		{
 			unsigned char* clk = pkt - kClockSize;
@@ -145,14 +167,28 @@ namespace scene
 			else if (s_badWarned++ == 0)
 				logf("scene: no clock packet in front of the weather packet - time of day left as recorded");
 		}
-		const int w = g_weather;
-		if (w < 0) { origExtract(pkt); return; }
+		// The packet carries an old type, a new type and how far between them
+		// the weather is - the game's own way of changing weather. A fixed row
+		// sets both ends the same; a keyed clip sets the two ends of the key
+		// pair it is between, and the blend does the rest.
+		const int keyedFrom = animWeather();
+		int from = g_weather, to = g_weather;
+		float interp = 0.0f;
+		if (keyedFrom >= 0)
+		{
+			from = keyedFrom;
+			to = (int)g_animTo >= 0 ? (int)g_animTo : keyedFrom;
+			interp = g_animBlend;
+			if (!(interp >= 0.0f)) interp = 0.0f;
+			if (interp > 1.0f) interp = 1.0f;
+		}
+		if (from < 0) { origExtract(pkt); return; }
+		if (from >= kWeatherCount) from = kWeatherCount - 1;
+		if (to < 0 || to >= kWeatherCount) to = from;
 		alignas(16) unsigned char copy[kWeatherSize];
 		memcpy(copy, pkt, kWeatherSize);
-		const int type = w >= kWeatherCount ? kWeatherCount - 1 : w;
-		const float interp = 0.0f;
-		memcpy(copy + kWeatherOld, &type, 4);
-		memcpy(copy + kWeatherNew, &type, 4);
+		memcpy(copy + kWeatherOld, &from, 4);
+		memcpy(copy + kWeatherNew, &to, 4);
 		memcpy(copy + kWeatherInterp, &interp, 4);
 		origExtract(copy);
 	}
@@ -161,7 +197,7 @@ namespace scene
 	{
 		putBackClock();
 		if (!packet || !overridesActive()) { origExtract(packet); return; }
-		if (!s_tcCleared && editorOpen()) setTcFlags(true);
+		if (!s_tcCleared && replayMode() != 0) setTcFlags(true);
 		__try { extractBody((unsigned char*)packet); }
 		__except (EXCEPTION_EXECUTE_HANDLER) { origExtract(packet); }
 	}
@@ -170,7 +206,8 @@ namespace scene
 	// closed or both rows are back on As Recorded.
 	void tick()
 	{
-		const bool want = overridesActive() && editorOpen();
+		// Same reach as the lights: an export is not the editor being open.
+		const bool want = overridesActive() && replayMode() != 0;
 		if (want == s_tcCleared) return;
 		setTcFlags(want);
 	}
@@ -194,6 +231,8 @@ namespace scene
 
 	const char* timeName(char* buf, int cap)
 	{
+		const int keyed = animTime();
+		if (keyed >= 0) { snprintf(buf, cap, "%02d:%02d (keyed)", keyed / 60, keyed % 60); return buf; }
 		const int t = g_time;
 		if (t < 0) return "As Recorded";
 		snprintf(buf, cap, "%02d:%02d", t / 60, t % 60);
@@ -202,6 +241,8 @@ namespace scene
 
 	const char* weatherName()
 	{
+		const int keyed = animWeather();
+		if (keyed >= 0 && keyed < kWeatherCount) return kWeather[keyed];
 		const int w = g_weather;
 		return w < 0 ? "As Recorded" : w < kWeatherCount ? kWeather[w] : "?";
 	}

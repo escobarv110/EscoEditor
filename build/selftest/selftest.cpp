@@ -577,6 +577,45 @@ int main(int argc, char** argv)
         CHECK(err < 1e-4f && rq::encode(rq::decode(packed)) == packed, "quaternion round trip");
     }
 
+    // ---- time and weather keyed over a clip ---------------------------------
+    {
+        lights::SceneTrack sky = {};
+        CHECK(lights::addSkyKey(sky, 0.0f, 18 * 60, 1) == 0 &&
+              lights::addSkyKey(sky, 2000.0f, 20 * 60, 7) == 1 && sky.n == 2, "keys go in, sorted by time");
+        CHECK(lights::addSkyKey(sky, 1000.0f, 19 * 60, 4) == 1 && sky.n == 3 && sky.k[1].minutes == 19 * 60,
+              "a key in the middle is inserted in its place");
+        CHECK(lights::addSkyKey(sky, 1002.0f, 19 * 60 + 30, 5) == 1 && sky.n == 3 && sky.k[1].minutes == 19 * 60 + 30,
+              "a key at the same moment replaces it rather than doubling up");
+
+        int mins = -1, from = -1, to = -1;
+        float blend = -1.0f;
+        CHECK(lights::evalSky(sky, 0.0f, &mins, &from, &to, &blend) && mins == 18 * 60 && from == 1 && blend == 0.0f,
+              "at the first key: its own values (%02d:%02d)", mins / 60, mins % 60);
+        lights::evalSky(sky, 500.0f, &mins, &from, &to, &blend);
+        CHECK(mins == 18 * 60 + 45 && from == 1 && to == 5 && fabsf(blend - 0.5f) < 1e-4f,
+              "halfway to the next key: the time is halfway and the weather blend is 0.5 (%02d:%02d, %d->%d, %.2f)",
+              mins / 60, mins % 60, from, to, blend);
+        lights::evalSky(sky, 99999.0f, &mins, &from, &to, &blend);
+        CHECK(mins == 20 * 60 && from == 7 && to == 7 && blend == 0.0f, "past the last key it holds there");
+
+        // the short way round midnight
+        lights::SceneTrack night = {};
+        lights::addSkyKey(night, 0.0f, 23 * 60, -1);
+        lights::addSkyKey(night, 1000.0f, 1 * 60, -1);
+        lights::evalSky(night, 500.0f, &mins, &from, &to, &blend);
+        CHECK(mins == 0 && from < 0, "23:00 to 01:00 passes through midnight, not backwards through the day (%02d:%02d)",
+              mins / 60, mins % 60);
+        lights::evalSky(night, 250.0f, &mins, &from, &to, &blend);
+        CHECK(mins == 23 * 60 + 30, "a quarter of the way is 23:30 (%02d:%02d)", mins / 60, mins % 60);
+
+        lights::SceneTrack empty = {};
+        CHECK(!lights::evalSky(empty, 100.0f, &mins, &from, &to, &blend) && mins == -1,
+              "no keys means nothing keyed - the menu rows keep working as they did");
+
+        lights::removeSkyKey(sky, 1);
+        CHECK(sky.n == 2 && sky.k[1].minutes == 20 * 60, "a key can be taken out again");
+    }
+
     // ---- the speed a marker keeps, as a percentage --------------------------
     {
         CHECK(mk::speedPercent(0) == 5 && mk::speedPercent(4) == 100 && mk::speedPercent(8) == 200,

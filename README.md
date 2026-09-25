@@ -9,7 +9,7 @@ place in the picture with a 3D gizmo and key over the clip**.
 No ScriptHookV, no Rockstar Editor+, no Menyoo. One `.asi`, and it runs
 alongside Rockstar Editor+ if you use that too.
 
-<sub>Version 4.3 · GTA V b3258–b3751 and singleplayer b3407 · MIT</sub>
+<sub>Version 4.4 · GTA V b3258–b3751 and singleplayer b3407 · MIT</sub>
 
 ---
 
@@ -52,7 +52,11 @@ alongside Rockstar Editor+ if you use that too.
   in a blackout, and **From the sun** — the engine works the light's colour and
   brightness out from the sun at the clip's hour, so it follows sunrise, noon
   and dusk on its own.
-* **Time of day and weather** per clip, in the light editor or on the menu.
+* **Time of day and weather** per clip, in the light editor or on the menu —
+  and **keyed over the clip** like a light if you want: the time runs in
+  minutes (taking the short way round midnight) and the weather uses the
+  game's own old/new/blend packet fields, so it crossfades rather than
+  stepping.
 * Lights are saved per project and clip in `EscoEditor.lights.txt`, and
   **"Same lights in every clip"** or **"Copy from"** move a rig between clips
   and projects.
@@ -119,7 +123,7 @@ build\selftest\selftest.bat   :: builds the self-test
 build\selftest\selftest.exe            :: a cameras.ymt may be passed, but is not needed
 ```
 
-The self-test is 135 checks over the parts that can run outside the game: the
+The self-test is 145 checks over the parts that can run outside the game: the
 metadata parser, the light record, keyframe interpolation, the light file
 format, the entity pools, the marker clipboard, Free Look's snapshots, MinHook
 itself. It prints `SELFTEST: all checks passed` or the first thing that broke.

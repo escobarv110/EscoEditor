@@ -1,4 +1,4 @@
-EscoEditor.asi 4.3  -  more control for the Rockstar Editor
+EscoEditor.asi 4.4  -  more control for the Rockstar Editor
 ======================================================================
 (formerly EditorCamSpeed.asi - same plugin, new name)
 
@@ -9,6 +9,28 @@ menu, adds scene lights you place in the picture with a 3D gizmo - fixed in
 the world, on the camera, or riding along with a ped, a vehicle or a prop -
 and keeps the free camera speed keys. The editor's own camera path,
 transitions, shake and depth of field are never touched.
+
+WHAT CHANGED IN 4.4
+  - Scene lights, and the time and weather, are in an export again - including
+    Rockstar Editor Plus's exporter. They were only put in while the marker
+    editor was open (replay mode 2), and an export is not that: the game's own
+    Export button opens the playback as BAKE, and RE+'s exporter rewrites that
+    to a full-project preview so it can capture the frames itself. Both were
+    therefore exported without any of it. The lights and the sky now go in
+    whenever the replay is running at all.
+  - The time of day and the weather can be keyed over a clip, the way a light
+    is. "Animate over the clip" in the light editor's Time & weather section,
+    then Key here at each moment you want.
+      Time runs in minutes and takes the short way round midnight, so keys at
+      23:00 and 01:00 pass through midnight rather than backwards through the
+      day.
+      Weather uses the game's own blend: the weather packet carries an old
+      type, a new type and how far between them it is, so a key pair sets the
+      two ends and the playhead sets the blend. No stepping from one weather
+      to another, no pop.
+    The keys are saved per clip in EscoEditor.lights.txt with everything else,
+    so they travel with "Copy from" and "Same lights in every clip".
+    With no keys, the Time of Day and Weather rows work exactly as before.
 
 WHAT CHANGED IN 4.3
   - Rockstar Editor Plus now actually installs when EscoEditor is there too.
@@ -311,7 +333,7 @@ WHAT CHANGED IN 2.9
 
 CHECK YOU HAVE THIS VERSION
   The first line of EscoEditor.log (next to the .asi) must say
-  "EscoEditor 4.3".
+  "EscoEditor 4.4".
 
 INSTALL
   FiveM:          close FiveM, run Install.bat - or copy EscoEditor.asi

@@ -141,7 +141,74 @@ namespace lights
 		bool     frameKnown;           // parent holds a frame at all
 	};
 
-	struct LightSet { int count; uint32_t nextId; Light l[kMaxLights]; };
+	// A clip's time of day and weather over its length. -1 in either field
+	// means "leave that one as recorded" at that key.
+	constexpr int kMaxSceneKeys = 32;
+	struct SceneKey { float t; int minutes; int weather; };
+	struct SceneTrack { int n; SceneKey k[kMaxSceneKeys]; };
+
+	struct LightSet { int count; uint32_t nextId; Light l[kMaxLights]; SceneTrack sky; };
+
+	// Minutes from a to b the short way round the clock: 23:00 to 01:00 runs
+	// forwards through midnight, not backwards through the whole day.
+	float lerpClock(int a, int b, float u)
+	{
+		int d = b - a;
+		if (d > 720) d -= 1440;
+		if (d < -720) d += 1440;
+		float m = (float)a + (float)d * u;
+		while (m < 0.0f) m += 1440.0f;
+		while (m >= 1440.0f) m -= 1440.0f;
+		return m;
+	}
+
+	// Where the track stands at `t` ms into the clip. Returns false when there
+	// is nothing keyed. `from`/`to`/`blend` are the weather pair to hand the
+	// game; `minutes` is the time of day, -1 for "as recorded".
+	bool evalSky(const SceneTrack& s, float t, int* minutes, int* from, int* to, float* blend)
+	{
+		*minutes = -1; *from = -1; *to = -1; *blend = 0.0f;
+		if (s.n <= 0) return false;
+		int i = 0;
+		while (i < s.n - 1 && s.k[i + 1].t <= t) ++i;
+		const SceneKey& a = s.k[i];
+		const bool last = (i >= s.n - 1) || t <= a.t;
+		const SceneKey& b = last ? a : s.k[i + 1];
+		float u = 0.0f;
+		if (!last && b.t > a.t) u = (t - a.t) / (b.t - a.t);
+		if (u < 0.0f) u = 0.0f;
+		if (u > 1.0f) u = 1.0f;
+
+		if (a.minutes >= 0)
+			*minutes = (int)(b.minutes >= 0 ? lerpClock(a.minutes, b.minutes, u) + 0.5f : (float)a.minutes);
+		if (a.weather >= 0)
+		{
+			*from = a.weather;
+			*to = b.weather >= 0 ? b.weather : a.weather;
+			*blend = (*to == *from) ? 0.0f : u;
+		}
+		return *minutes >= 0 || *from >= 0;
+	}
+
+	// Sorted by time, one key per moment.
+	int addSkyKey(SceneTrack& s, float t, int minutes, int weather)
+	{
+		for (int i = 0; i < s.n; ++i)
+			if (fabsf(s.k[i].t - t) <= 5.0f) { s.k[i].minutes = minutes; s.k[i].weather = weather; return i; }
+		if (s.n >= kMaxSceneKeys) return -1;
+		int at = s.n;
+		while (at > 0 && s.k[at - 1].t > t) { s.k[at] = s.k[at - 1]; --at; }
+		s.k[at] = { t, minutes, weather };
+		++s.n;
+		return at;
+	}
+
+	void removeSkyKey(SceneTrack& s, int i)
+	{
+		if (i < 0 || i >= s.n) return;
+		for (int j = i; j < s.n - 1; ++j) s.k[j] = s.k[j + 1];
+		--s.n;
+	}
 
 	struct Cam { float pos[3], right[3], fwd[3], up[3]; float fov, nearClip, farClip; };
 	struct Ctx { bool valid; Cam cam; float now, marker; int markerIndex; ULONGLONG at; };
@@ -1419,6 +1486,23 @@ namespace lights
 
 		syncScope();
 
+		// The clip's own time and weather, handed to ecs_scene.inc for the
+		// packet hook. Published every frame and stale after a second, so a
+		// clip without keys falls straight back to the menu rows.
+		{
+			Lock lk;
+			int mins = -1, from = -1, to = -1;
+			float blend = 0.0f;
+			if (g_cur && evalSky(g_cur->sky, c.now, &mins, &from, &to, &blend))
+			{
+				scene::g_animTime = mins;
+				scene::g_animFrom = from;
+				scene::g_animTo = to;
+				scene::g_animBlend = blend;
+				InterlockedExchange64((volatile LONGLONG*)&scene::g_animAt, (LONGLONG)c.at);
+			}
+		}
+
 		Draw d;
 		d.count = 0;
 		d.at = c.at;
@@ -1583,7 +1667,12 @@ namespace lights
 
 	void __fastcall hkConsumer()
 	{
-		if (g_ready && editorOpen()) { inject(); tallyLine(GetTickCount64()); }
+		// Any replay activity, not just the marker editor being open. An export
+		// does not run in the editor: the game's own Export button opens the
+		// playback as BAKE, and Rockstar Editor Plus's exporter rewrites that to
+		// a full-project preview so it can capture the frames itself. Gating on
+		// "the editor is open" left the lights out of both.
+		if (g_ready && replayMode() != 0) { inject(); tallyLine(GetTickCount64()); }
 		origConsumer();
 	}
 
@@ -1636,6 +1725,12 @@ namespace lights
 				}
 				appendParams(o, "b", nullptr, L.base);
 				for (int k = 0; k < L.nkeys; ++k) appendParams(o, "k", &L.keys[k].t, L.keys[k].p);
+			}
+			for (int k = 0; k < e.set->sky.n; ++k)
+			{
+				const SceneKey& s = e.set->sky.k[k];
+				snprintf(b, sizeof(b), "t %.9g %d %d\n", s.t, s.minutes, s.weather);
+				o += b;
 			}
 		}
 		return o;
@@ -1699,6 +1794,13 @@ namespace lights
 				const char* sp = strchr(s + 6, ' ');
 				set = (sp && sp[1]) ? findSet(sp + 1, clip, true) : nullptr;
 				L = nullptr;
+				continue;
+			}
+			if (!strncmp(s, "t ", 2))
+			{
+				float t = 0.0f;
+				int mins = -1, wx = -1;
+				if (set && sscanf_s(s + 2, "%f %d %d", &t, &mins, &wx) == 3) addSkyKey(set->sky, t, mins, wx);
 				continue;
 			}
 			if (!strncmp(s, "light ", 6))
