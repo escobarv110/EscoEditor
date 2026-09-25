@@ -1,4 +1,4 @@
-EscoEditor.asi 4.7  -  more control for the Rockstar Editor
+EscoEditor.asi 4.8  -  more control for the Rockstar Editor
 ======================================================================
 (formerly EditorCamSpeed.asi - same plugin, new name)
 
@@ -9,6 +9,15 @@ menu, adds scene lights you place in the picture with a 3D gizmo - fixed in
 the world, on the camera, or riding along with a ped, a vehicle or a prop -
 and keeps the free camera speed keys. The editor's own camera path,
 transitions, shake and depth of field are never touched.
+
+WHAT CHANGED IN 4.8
+  - ENB is found. 4.7 walked the game's module list for it but gave up after
+    96 modules, and FiveM's game process loads far more than that before
+    ENB's d3d11.dll (which arrives when the game makes its D3D device). Now the
+    whole list is walked; failing that, d3d11.dll is looked up by path in the
+    game's folder and next to this plugin; failing that, the SDK's entry
+    points are read from the DLL's file and found in the loaded image. If it
+    still misses, the log lists every d3d11.dll / dxgi.dll it saw.
 
 WHAT CHANGED IN 4.7
   - ENB is found now. "None in the game" was a detection bug: ENB's SDK is
@@ -374,7 +383,7 @@ WHAT CHANGED IN 2.9
 
 CHECK YOU HAVE THIS VERSION
   The first line of EscoEditor.log (next to the .asi) must say
-  "EscoEditor 4.7".
+  "EscoEditor 4.8".
 
 INSTALL
   FiveM:          close FiveM, run Install.bat - or copy EscoEditor.asi

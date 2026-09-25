@@ -7,6 +7,7 @@
 // the light editor's key. PSO files are stored big-endian and byte-swapped by
 // the game on load, so the buffer is swapped in 4-byte words first.
 #include "../../src/main.cpp"
+#include <tlhelp32.h>
 
 static int g_fail = 0, g_ran = 0;
 #define CHECK(cond, ...) do { ++g_ran; if (!(cond)) { ++g_fail; printf("  FAIL: " __VA_ARGS__); printf("\n"); } } while (0)
@@ -633,6 +634,33 @@ int main(int argc, char** argv)
               out[ed::I_DIST], out[13], out[17]);
         lights::evalEnb(tr, 1000.0f, out, ed::kinds);
         CHECK(out[17] == 0.0f, "at the next key the switch changes");
+
+        // finding ENB: the export reader against the real ENB file, and a module
+        // walk that sees every module (4.7 stopped at 96 - FiveM loads more)
+        {
+            const wchar_t* enbPath = L"D:\\Grand Theft Auto V Legacy\\d3d11.dll";
+            if (GetFileAttributesW(enbPath) != INVALID_FILE_ATTRIBUTES)
+            {
+                uint32_t img = 0;
+                const uint32_t rs = ed::fileExportRva(enbPath, "ENBSetParameter", &img);
+                const uint32_t rg = ed::fileExportRva(enbPath, "ENBGetParameter", &img);
+                CHECK(rs && rg && rs < img && rg < img && rs != rg,
+                      "ENBSetParameter / ENBGetParameter are read out of the real ENB d3d11.dll (rva 0x%X, 0x%X, image 0x%X)", rs, rg, img);
+                CHECK(ed::fileExportRva(enbPath, "NoSuchExport", &img) == 0, "and a name it does not export gives 0");
+            }
+            ed::resolve();
+            HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, GetCurrentProcessId());
+            int real = 0;
+            MODULEENTRY32W me = {};
+            me.dwSize = sizeof(me);
+            if (snap != INVALID_HANDLE_VALUE)
+            {
+                for (BOOL ok = Module32FirstW(snap, &me); ok; ok = Module32NextW(snap, &me)) ++real;
+                CloseHandle(snap);
+            }
+            CHECK(!ed::s_found && ed::s_modsSeen == real && real > 0,
+                  "the module walk sees every module in the process (%d of %d) and finds no ENB where there is none", ed::s_modsSeen, real);
+        }
 
         // one option set on one keyframe: the others keep following the keyframes around it
         {

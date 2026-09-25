@@ -138,54 +138,166 @@ namespace enbdof
 
 	// ---- finding ENB and its DOF shader ----------------------------------------
 	// The SDK is part of ENB's own d3d11.dll - NVE's has it - and nothing has
-	// to be installed. But ENB loads the SYSTEM d3d11.dll too, under the same
-	// name, and asking Windows for "d3d11.dll" can hand back that one, which
-	// has none of it. So every loaded module is asked for the export instead,
-	// whatever it is called and wherever it was loaded from.
-	int s_modsSeen = 0;
+	// to be installed. Finding that DLL is the whole problem: ENB loads the
+	// SYSTEM d3d11.dll too, under the same name; FiveM's game process loads
+	// well over a hundred modules before ENB's (4.7 gave up after 96); and a
+	// packed ENB can keep its export table out of GetProcAddress's reach. So
+	// there are three ways in, each on its own, and the log says what it saw.
+	int  s_modsSeen = 0;
+	char s_d3dSeen[4][300] = {};    // the d3d11 / dxgi modules found, for the log
+	int  s_d3dSeenCount = 0;
+
+	bool take(HMODULE h, FnSet set, FnGet get, const char* how)
+	{
+		s_set = set;
+		s_get = get;
+		s_ver   = (FnVer)GetProcAddress(h, "ENBGetSDKVersion");
+		s_setCb = (FnSetCb)GetProcAddress(h, "ENBSetCallbackFunction");
+		__try { s_sdk = s_ver ? s_ver() : 0; }
+		__except (EXCEPTION_EXECUTE_HANDLER) { s_sdk = 0; }
+		s_found = true;
+		logf("enb: ENB found %s at %p - its SDK (version %ld) is there; the ENB option can drive its depth of field", how, (void*)h, s_sdk);
+		return true;
+	}
+
+	bool tryModule(HMODULE h, const char* how)
+	{
+		if (!h) return false;
+		FnSet set = (FnSet)GetProcAddress(h, "ENBSetParameter");
+		FnGet get = (FnGet)GetProcAddress(h, "ENBGetParameter");
+		return set && get && take(h, set, get, how);
+	}
+
+	// The RVA of an export, read from the DLL's file on disk, or 0.
+	uint32_t fileExportRva(const wchar_t* path, const char* want, uint32_t* sizeOfImage)
+	{
+		HANDLE f = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
+		if (f == INVALID_HANDLE_VALUE) return 0;
+		const DWORD size = GetFileSize(f, nullptr);
+		uint8_t* d = (size > 0x1000 && size < (64u << 20)) ? (uint8_t*)VirtualAlloc(nullptr, size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE) : nullptr;
+		DWORD got = 0;
+		const bool ok = d && ReadFile(f, d, size, &got, nullptr) && got == size;
+		CloseHandle(f);
+		uint32_t rva = 0;
+		if (ok)
+		{
+			__try
+			{
+				const IMAGE_DOS_HEADER* dos = (const IMAGE_DOS_HEADER*)d;
+				const IMAGE_NT_HEADERS64* nt = (const IMAGE_NT_HEADERS64*)(d + dos->e_lfanew);
+				*sizeOfImage = nt->OptionalHeader.SizeOfImage;
+				const IMAGE_SECTION_HEADER* sec = IMAGE_FIRST_SECTION(nt);
+				const int nsec = nt->FileHeader.NumberOfSections;
+				auto toOff = [&](uint32_t r) -> int64_t {
+					for (int i = 0; i < nsec; ++i)
+					{
+						const uint32_t va = sec[i].VirtualAddress, len = sec[i].Misc.VirtualSize > sec[i].SizeOfRawData ? sec[i].Misc.VirtualSize : sec[i].SizeOfRawData;
+						if (r >= va && r < va + len) return (int64_t)sec[i].PointerToRawData + (r - va);
+					}
+					return -1;
+				};
+				const IMAGE_DATA_DIRECTORY& dir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
+				const int64_t eo = toOff(dir.VirtualAddress);
+				if (dir.VirtualAddress && eo > 0)
+				{
+					const IMAGE_EXPORT_DIRECTORY* ex = (const IMAGE_EXPORT_DIRECTORY*)(d + eo);
+					const int64_t no = toOff(ex->AddressOfNames), oo = toOff(ex->AddressOfNameOrdinals), fo = toOff(ex->AddressOfFunctions);
+					for (DWORD i = 0; no > 0 && oo > 0 && fo > 0 && i < ex->NumberOfNames; ++i)
+					{
+						const int64_t so = toOff(((const uint32_t*)(d + no))[i]);
+						if (so <= 0 || strcmp((const char*)(d + so), want) != 0) continue;
+						const uint16_t ord = ((const uint16_t*)(d + oo))[i];
+						rva = ((const uint32_t*)(d + fo))[ord];
+						break;
+					}
+				}
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER) { rva = 0; }
+		}
+		if (d) VirtualFree(d, 0, MEM_RELEASE);
+		return rva;
+	}
+
+	// Way 3: Windows will not hand the export out, so read it from the file and
+	// find it at the same offset in memory - once the loaded image is the same
+	// size as the file's, so it is the same DLL.
+	bool tryFromFile(HMODULE h, const wchar_t* path, uint32_t loadedSize)
+	{
+		uint32_t fileSize = 0;
+		const uint32_t rs = fileExportRva(path, "ENBSetParameter", &fileSize);
+		uint32_t fileSize2 = 0;
+		const uint32_t rg = fileExportRva(path, "ENBGetParameter", &fileSize2);
+		if (!rs || !rg || fileSize != loadedSize || rs >= loadedSize || rg >= loadedSize) return false;
+		FnSet set = (FnSet)((uint8_t*)h + rs);
+		FnGet get = (FnGet)((uint8_t*)h + rg);
+		return take(h, set, get, "(its exports read from the file, the loaded image hides them)");
+	}
 
 	bool resolve()
 	{
 		if (s_found) return true;
-		HMODULE mods[96] = {};
-		char names[96][48] = {};
 		int n = 0;
+		s_d3dSeenCount = 0;
+		HMODULE d3d[4] = {};
+		wchar_t d3dPath[4][300] = {};
+		uint32_t d3dSize[4] = {};
+
+		// Way 1: every module in the loader's list. No cap worth the name.
 		__try
 		{
 			const uint8_t* peb = (const uint8_t*)__readgsqword(0x60);
 			const uint8_t* ldr = *(const uint8_t* const*)(peb + 0x18);
 			const LIST_ENTRY* head = (const LIST_ENTRY*)(ldr + 0x20);        // InMemoryOrderModuleList
-			for (const LIST_ENTRY* e = head->Flink; e && e != head && n < 96; e = e->Flink)
+			for (const LIST_ENTRY* e = head->Flink; e && e != head && n < 4096; e = e->Flink, ++n)
 			{
 				const uint8_t* entry = (const uint8_t*)e - 0x10;              // LDR_DATA_TABLE_ENTRY
 				struct NtStr { uint16_t Length, MaximumLength; const wchar_t* Buffer; };
-				const NtStr* nm = (const NtStr*)(entry + 0x58);               // BaseDllName
-				mods[n] = *(HMODULE const*)(entry + 0x30);                    // DllBase
-				int k = 0;
-				for (int i = 0; nm->Buffer && i < nm->Length / 2 && k < 47; ++i)
-					names[n][k++] = nm->Buffer[i] < 128 ? (char)nm->Buffer[i] : '_';
-				names[n][k] = 0;
-				++n;
+				const HMODULE base = *(HMODULE const*)(entry + 0x30);         // DllBase
+				const uint32_t imageSize = *(const uint32_t*)(entry + 0x40);  // SizeOfImage
+				const NtStr* full = (const NtStr*)(entry + 0x48);             // FullDllName
+				const NtStr* nm   = (const NtStr*)(entry + 0x58);             // BaseDllName
+				char low[48] = {};
+				for (int i = 0, k = 0; nm->Buffer && i < nm->Length / 2 && k < 47; ++i)
+				{
+					wchar_t w = nm->Buffer[i];
+					if (w >= L'A' && w <= L'Z') w = (wchar_t)(w + 32);
+					low[k++] = w < 128 ? (char)w : '_';
+				}
+				if ((!strcmp(low, "d3d11.dll") || !strcmp(low, "dxgi.dll")) && s_d3dSeenCount < 4)
+				{
+					const int j = s_d3dSeenCount++;
+					d3d[j] = base;
+					d3dSize[j] = imageSize;
+					const int len = full->Buffer ? (full->Length / 2 < 299 ? full->Length / 2 : 299) : 0;
+					for (int i = 0; i < len; ++i) { d3dPath[j][i] = full->Buffer[i]; s_d3dSeen[j][i] = full->Buffer[i] < 128 ? (char)full->Buffer[i] : '_'; }
+					d3dPath[j][len] = 0;
+					s_d3dSeen[j][len] = 0;
+				}
+				if (tryModule(base, "in the game's module list")) return true;
 			}
 		}
 		__except (EXCEPTION_EXECUTE_HANDLER) {}
 		s_modsSeen = n;
-		for (int i = 0; i < n; ++i)
+
+		// Way 2: by path - the game's folder, where ENB's own files are, and
+		// next to this plugin, FiveM's plugins folder. Both places ENB is put.
+		wchar_t path[MAX_PATH];
+		if (GetCurrentDirectoryW(MAX_PATH - 16, path))
 		{
-			if (!mods[i]) continue;
-			FnSet set = (FnSet)GetProcAddress(mods[i], "ENBSetParameter");
-			FnGet get = (FnGet)GetProcAddress(mods[i], "ENBGetParameter");
-			if (!set || !get) continue;
-			s_set = set;
-			s_get = get;
-			s_ver = (FnVer)GetProcAddress(mods[i], "ENBGetSDKVersion");
-			s_setCb = (FnSetCb)GetProcAddress(mods[i], "ENBSetCallbackFunction");
-			__try { s_sdk = s_ver ? s_ver() : 0; }
-			__except (EXCEPTION_EXECUTE_HANDLER) { s_sdk = 0; }
-			s_found = true;
-			logf("enb: ENB found - %s at %p exports its SDK (version %ld); the ENB option can drive its depth of field",
-				names[i], (void*)mods[i], s_sdk);
-			return true;
+			wcscat_s(path, L"\\d3d11.dll");
+			if (tryModule(GetModuleHandleW(path), "in the game's folder")) return true;
+		}
+		if (GetModuleFileNameW(g_self, path, MAX_PATH))
+		{
+			if (wchar_t* slash = wcsrchr(path, L'\\')) { slash[1] = 0; wcscat_s(path, L"d3d11.dll"); }
+			if (tryModule(GetModuleHandleW(path), "next to this plugin")) return true;
+		}
+
+		// Way 3: a d3d11.dll that is not the system's, whose file has the SDK.
+		for (int j = 0; j < s_d3dSeenCount; ++j)
+		{
+			if (!d3d[j] || wcsstr(d3dPath[j], L"\\System32\\") || wcsstr(d3dPath[j], L"\\system32\\") || wcsstr(d3dPath[j], L"\\SysWOW64\\")) continue;
+			if (tryFromFile(d3d[j], d3dPath[j], d3dSize[j])) return true;
 		}
 		return false;
 	}
@@ -530,7 +642,11 @@ namespace enbdof
 		{
 			static int s_missLogs = 0;
 			if (now > 30000 && s_missLogs++ == 0)
-				logf("enb: none of the %d modules in the game exports ENBSetParameter - no ENB loaded", s_modsSeen);
+			{
+				logf("enb: ENB not found in any of the %d modules in the game (nor by path, nor from a file)", s_modsSeen);
+				for (int j = 0; j < s_d3dSeenCount; ++j) logf("enb:   loaded: %s", s_d3dSeen[j]);
+				if (!s_d3dSeenCount) logf("enb:   no d3d11.dll or dxgi.dll in the module list at all");
+			}
 			return;
 		}
 		if (!s_ready) { calibrate(); return; }
