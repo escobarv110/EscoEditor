@@ -228,7 +228,7 @@ namespace lights
 	// Every option of ENB's depth of field, keyed over the clip for the ENB
 	// option (ecs_enbdof.inc). Floats interpolate, whole numbers round, the
 	// switches change at the key.
-	constexpr int kEnbParams = 30, kMaxEnbKeys = 16;
+	constexpr int kEnbParams = 30, kMaxEnbKeys = 64;   // 64 since 4.16: DOF To All gives every keyframe its own
 	struct EnbKey { float t; uint32_t set; float v[kEnbParams]; };   // `set`: bit i = this key sets option i
 	struct EnbTrack { int n; EnbKey k[kMaxEnbKeys]; };
 

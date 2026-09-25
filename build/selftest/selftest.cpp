@@ -925,6 +925,39 @@ int main(int argc, char** argv)
         CHECK(fabsf(after - 0.075f) < 1e-6f && fabsf(k3 - 0.03f) < 1e-6f && fabsf(past - 0.03f) < 1e-6f,
               "and back down to keyframe 3, which has none of its own - it no longer carries on (%.3f %.3f %.3f)", after, k3, past);
         CHECK(anaMid == 0.0f && ana2 == 1.0f && ana3 == 0.0f, "a switch changes at its keyframe and ends at the next");
+
+        // Copy DOF / Paste DOF / DOF To All carry the ENB rows (4.16)
+        {
+            namespace lt = lights;
+            lt::Lock lk;
+            lt::clearStore();
+            lt::LightSet* cs = lt::findSet("CopyProj", 0, true);
+            lt::LightSet* was = lt::g_cur;
+            lt::g_cur = cs;
+            lt::setEnbParam(cs->enb, 0.0f, ed::I_APERTURE, 0.12f, seed);   // keyframe 1: 100%, anamorphic on
+            lt::setEnbParam(cs->enb, 0.0f, 17, 1.0f, seed);
+            lt::setEnbParam(cs->enb, 2000.0f, 11, 9.0f, seed);             // keyframe 3: its own chromatic spread
+            ed::g_enbClip.own = 0;
+            for (int q = 0; q < ed::N; ++q) { float x; if (lt::enbKeyValue(cs->enb, 0.0f, q, &x)) { ed::g_enbClip.own |= 1u << q; ed::g_enbClip.v[q] = x; } }
+            ed::g_enbClip.used = true;
+            const bool ok = ed::putEnbAt(1000.0f) && ed::putEnbAt(2000.0f);
+            float a1[ed::N], a3[ed::N];
+            memcpy(a1, seed, sizeof(a1)); ed::evalByMarker(cs->enb, 1000.0f, a1);
+            memcpy(a3, seed, sizeof(a3)); ed::evalByMarker(cs->enb, 2000.0f, a3);
+            float cs3 = 0.0f;
+            CHECK(ok && a1[ed::I_APERTURE] == 0.12f && a1[17] == 1.0f && a3[ed::I_APERTURE] == 0.12f && a3[17] == 1.0f &&
+                  !lt::enbKeyValue(cs->enb, 2000.0f, 11, &cs3),
+                  "pasted keyframes get exactly the copied ENB values - and lose the ones the copy did not have");
+            ed::g_enbClip.own = 0;
+            ed::putEnbAt(1000.0f);
+            float c1;
+            CHECK(!lt::enbKeyValue(cs->enb, 1000.0f, ed::I_APERTURE, &c1), "pasting a keyframe with no ENB values of its own puts the defaults back");
+            bool fits = true;
+            for (int q = 0; q < 40; ++q) if (!lt::setEnbParam(cs->enb, 3000.0f + 100.0f * q, 11, 2.0f, seed)) fits = false;
+            CHECK(fits, "DOF To All has room: 40 more keyframes with values of their own still fit (%d)", cs->enb.n);
+            lt::g_cur = was;
+            lt::clearStore();
+        }
         fakestore::remove();
     }
 

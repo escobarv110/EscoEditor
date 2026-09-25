@@ -427,9 +427,25 @@ namespace menu
 		case R_CUT:    clipboard::copy(true);  return false;
 		case R_PASTE:  return clipboard::paste();
 		case R_SPDALL: clipboard::speedToAll(); return false;
-		case R_DCOPY:  dof::copy();            return false;
-		case R_DPASTE: return dof::paste();          // the stock DOF rows show the new values after a rebuild
-		case R_DALL:   dof::applyToAll();      return false;
+		// the game's DOF fields and, with them, the keyframe's ENB rows (4.16)
+		case R_DCOPY:
+			dof::copy();
+			if (enbdof::copyEnbHere()) strncat_s(dof::g_last, " ENB too.", _TRUNCATE);
+			return false;
+		case R_DPASTE:
+		{
+			const bool game = dof::paste();
+			const bool enb = enbdof::pasteEnbHere();
+			if (enb) strncat_s(dof::g_last, game ? " ENB too." : " ENB pasted.", _TRUNCATE);
+			return game || enb;                        // rebuilt: the rows show the new values
+		}
+		case R_DALL:
+		{
+			dof::applyToAll();
+			const int n = enbdof::enbToAll();
+			if (n >= 0) strncat_s(dof::g_last, " ENB too.", _TRUNCATE);
+			return n >= 0;
+		}
 		case R_ENB:    enbdof::setOn(!g_cfg.enbDof); return true;
 		case R_LOPEN:  if (lightui::g_imgui) InterlockedExchange(&lights::g_openReq, 1); return false;
 		case R_LKEY:   lights::beginCapture(lights::CAP_MENU); return false;

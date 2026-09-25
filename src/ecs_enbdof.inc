@@ -1064,6 +1064,83 @@ namespace enbdof
 		lights::markDirty();
 	}
 
+	// ---- Copy DOF / Paste DOF / DOF To All, for the ENB rows (4.16) -------------
+	// The three rows under the game's own DOF rows copied only the game's
+	// fields. They carry the keyframe's ENB values too: exactly what it set
+	// itself, so a pasted keyframe is set the same and falls back to the same
+	// defaults for the rest - it looks the same.
+	struct EnbClip { bool used; uint32_t own; float v[N]; };
+	EnbClip g_enbClip = {};
+
+	bool copyEnbHere()
+	{
+		float t;
+		if (!s_ready || !markerTimeNow(&t)) return false;
+		lights::Lock lk;
+		if (!lights::g_cur) return false;
+		g_enbClip.own = 0;
+		for (int p = 0; p < N; ++p)
+		{
+			float x;
+			if (lights::enbKeyValue(lights::g_cur->enb, t, p, &x)) { g_enbClip.own |= 1u << p; g_enbClip.v[p] = x; }
+		}
+		g_enbClip.used = true;
+		logf("enb: copied keyframe at %.0f ms - %s", t, g_enbClip.own ? "its own ENB values" : "no ENB values of its own (the defaults)");
+		return true;
+	}
+
+	// The copied ENB values onto the keyframe at `t` (the lock is held).
+	bool putEnbAt(float t)
+	{
+		lights::EnbTrack& tr = lights::g_cur->enb;
+		Want w;
+		computeAt(t, w);
+		bool ok = true;
+		for (int p = 0; p < N; ++p)
+		{
+			if (g_enbClip.own & (1u << p)) { if (!lights::setEnbParam(tr, t, p, g_enbClip.v[p], w.v)) ok = false; }
+			else lights::clearEnbParam(tr, t, p);
+		}
+		return ok;
+	}
+
+	bool pasteEnbHere()
+	{
+		float t;
+		if (!s_ready || !g_enbClip.used || !markerTimeNow(&t)) return false;
+		lights::Lock lk;
+		if (!lights::g_cur) return false;
+		const bool ok = putEnbAt(t);
+		lights::markDirty();
+		logf("enb: pasted onto the keyframe at %.0f ms%s", t, ok ? "" : " - some values did not fit (too many keyframes with values of their own)");
+		return ok;
+	}
+
+	// This keyframe's ENB values onto every other keyframe of the clip.
+	int enbToAll()
+	{
+		float t;
+		if (!s_ready || !copyEnbHere() || !markerTimeNow(&t)) return -1;
+		void* st = game::replayStorage();
+		const int n = st ? st::count(st) : 0;
+		if (n <= 0 || n > 4096) return -1;
+		lights::Lock lk;
+		if (!lights::g_cur) return -1;
+		int done = 0, full = 0;
+		for (int i = 0; i < n; ++i)
+		{
+			const void* m = st::tryGet(st, i);
+			if (!m) continue;
+			EdDof d;
+			readDof(m, d);
+			if (!d.have || fabsf(d.t - t) <= 5.0f) continue;
+			if (putEnbAt(d.t)) ++done; else ++full;
+		}
+		lights::markDirty();
+		logf("enb: this keyframe's ENB values put on %d other keyframe(s)%s", done, full ? " - some did not fit" : "");
+		return done;
+	}
+
 	const char* format(int p, float v, char* buf, int cap)
 	{
 		if (p == V_APERTURE) { snprintf(buf, cap, "%.0f%%", v); return buf; }

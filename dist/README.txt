@@ -1,4 +1,4 @@
-EscoEditor.asi 4.15  -  more control for the Rockstar Editor
+EscoEditor.asi 4.16  -  more control for the Rockstar Editor
 ======================================================================
 (formerly EditorCamSpeed.asi - same plugin, new name)
 
@@ -9,6 +9,15 @@ menu, adds scene lights you place in the picture with a 3D gizmo - fixed in
 the world, on the camera, or riding along with a ped, a vehicle or a prop -
 and keeps the free camera speed keys. The editor's own camera path,
 transitions, shake and depth of field are never touched.
+
+WHAT CHANGED IN 4.16
+  - Copy DOF, Paste DOF and DOF To All carry the ENB rows too. They copied
+    only the game's own DOF fields (Focus, Intensity, distance), so the ENB
+    look stayed behind. Now a paste gives the keyframe exactly the ENB values
+    the copied one set - and drops any it set that the copy did not - so it
+    looks the same. The help line says "ENB too." when it did.
+  - Up to 64 keyframes of a clip can hold ENB values of their own (was 16),
+    so DOF To All reaches every keyframe of a long clip.
 
 WHAT CHANGED IN 4.15
   - ENB: Aperture is the blur amount - 0% no blur at all, 100% the most, in
@@ -509,7 +518,7 @@ WHAT CHANGED IN 2.9
 
 CHECK YOU HAVE THIS VERSION
   The first line of EscoEditor.log (next to the .asi) must say
-  "EscoEditor 4.15".
+  "EscoEditor 4.16".
 
 INSTALL
   FiveM:          close FiveM, run Install.bat - or copy EscoEditor.asi
