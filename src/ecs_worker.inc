@@ -83,8 +83,8 @@ DWORD WINAPI Worker(LPVOID)
 			keyName(g_cfg.keyBoost, d, sizeof(d)), g_cfg.boostMul,
 			keyName(g_cfg.keySlow, e, sizeof(e)), g_cfg.slowMul,
 			g_cfg.anywhere ? " (keys accepted anywhere in the editor)" : " (keys in Edit Camera only)");
-		logf("config: menu page %s, clip speed %s, scene %s, lights %s; keyframe clipboard holds %d keyframe(s)",
-			menu::pageName(g_cfg.menuPage), g_cfg.clipSpeed ? "on" : "off", g_cfg.scene ? "on" : "off", g_cfg.lights ? "on" : "off", clipboard::g_count);
+		logf("config: menu page %s, scene %s, lights %s; keyframe clipboard holds %d keyframe(s)",
+			menu::pageName(g_cfg.menuPage), g_cfg.scene ? "on" : "off", g_cfg.lights ? "on" : "off", clipboard::g_count);
 	}
 
 	if (globals)
@@ -178,7 +178,6 @@ DWORD WINAPI Worker(LPVOID)
 		if (globals && now >= nextPoll)
 		{
 			nextPoll = now + 500;
-			clipspeed::poll();
 			rs::poll();
 		}
 		scene::tick();

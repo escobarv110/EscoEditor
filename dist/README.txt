@@ -1,4 +1,4 @@
-EscoEditor.asi 4.0  -  more control for the Rockstar Editor
+EscoEditor.asi 4.1  -  more control for the Rockstar Editor
 ======================================================================
 (formerly EditorCamSpeed.asi - same plugin, new name)
 
@@ -10,7 +10,17 @@ the world, on the camera, or riding along with a ped, a vehicle or a prop -
 and keeps the free camera speed keys. The editor's own camera path,
 transitions, shake and depth of field are never touched.
 
-4.0 IS THE FIRST PUBLIC RELEASE
+WHAT CHANGED IN 4.1
+  - "Speed To All" on the Copy & Paste page: the speed of the keyframe whose
+    menu is open goes onto every keyframe of the clip. Set one keyframe to the
+    speed you want, then this row puts it on the whole sequence. The row's
+    help line says which speed it will use and what it did.
+  - The marker Speed row in 5% steps is gone. It extended the game's nine-value
+    speed index and hooked the playback's speed lookup to answer for the extra
+    values, and it did not work in practice. The Speed row is the game's own
+    again, with its nine steps. ClipSpeed is removed from the ini.
+
+4.0 WAS THE FIRST PUBLIC RELEASE
   Everything below is the history of how it got here, newest first. The source
   is at https://github.com/escobarv110/EscoEditor (MIT).
 
@@ -274,7 +284,7 @@ WHAT CHANGED IN 2.9
 
 CHECK YOU HAVE THIS VERSION
   The first line of EscoEditor.log (next to the .asi) must say
-  "EscoEditor 4.0".
+  "EscoEditor 4.1".
 
 INSTALL
   FiveM:          close FiveM, run Install.bat - or copy EscoEditor.asi
@@ -476,7 +486,6 @@ WITH ROCKSTAR EDITOR+  (RockstarEditorPlus.asi)
   One thing they cannot share: the FREE CAMERA SPEED. Both write it, so leave
   one of them at 100% - in EscoEditor either set Camera Speed to 100% or put
   Hotkeys=0 and Speed=100 in EscoEditor.ini.
-  If RE+ ever also takes over the marker Speed row, set ClipSpeed=0 here.
 
 SPEED ROW (the game's own row in the marker menu)
   Left/right step 5% at a time, from 5% to 1000%. Playback and export use the
@@ -498,7 +507,6 @@ INI (EscoEditor.ini) - the menu writes the same keys
   Hotkeys=2             0 off, 1 step keys, 2 + hold keys, 3 + mouse wheel
   MenuRows=1            0 = no rows in the editor menu
   MenuPage=1            the page EscoEditor opens on (0 closed .. 4 Lights)
-  ClipSpeed=1           0 = the Speed row keeps the game's 9 steps
   Scene=1               0 = no Time & Weather page
   Lights=1              0 = no scene lights and no light editor
   KeyLights=0x4C        the key that opens the light editor (L); the Lights

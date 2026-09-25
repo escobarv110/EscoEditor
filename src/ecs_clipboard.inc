@@ -120,6 +120,54 @@ namespace clipboard
 		return h.ord >= 0;
 	}
 
+	// The speed of the keyframe whose menu is open, as a percentage, or -1.
+	int speedHere()
+	{
+		const void* m = game::currentMarker();
+		if (!m) return -1;
+		__try { return mk::speedPercent(mk::i32(m, mk::OFF_Speed)); }
+		__except (EXCEPTION_EXECUTE_HANDLER) { return -1; }
+	}
+
+	// That speed onto every keyframe of the clip. A whole sequence set from one
+	// place, instead of one keyframe at a time. Returns how many were changed,
+	// -1 when there was nothing to work with.
+	int speedToAll()
+	{
+		Here h;
+		if (!here(h)) { strcpy_s(g_last, "No keyframe under the menu."); return -1; }
+		int idx = 0;
+		__try { idx = mk::i32(st::tryGet(h.s, h.idx), mk::OFF_Speed); }
+		__except (EXCEPTION_EXECUTE_HANDLER) { strcpy_s(g_last, "Could not read this keyframe's speed."); return -1; }
+
+		int done = 0;
+		for (int i = 0; i < h.n; ++i)
+		{
+			void* m = st::tryGet(h.s, h.list[i]);
+			if (!m || h.list[i] == h.idx) continue;
+			__try
+			{
+				if (mk::i32(m, mk::OFF_Speed) == idx) continue;    // already there
+				mk::put(m, mk::OFF_Speed, &idx, 4);
+				mk::markEdited(m, mk::BIT_Speed);
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER) { continue; }
+			++done;
+		}
+		// The same pair the paste uses, so the editor re-times the clip and the
+		// timeline redraws with the new speeds.
+		if (done)
+		{
+			st::recalc(h.s, 1);
+			for (int i = 0; i < h.n; ++i) st::blendUpdated(h.s, h.list[i]);
+		}
+		const int pct = mk::speedPercent(idx);
+		snprintf(g_last, sizeof(g_last), done ? "%d keyframe(s) set to %d%%." : "Every keyframe was already at %d%%.",
+			done ? done : pct, done ? pct : 0);
+		logf("clipboard: speed %d%% (index %d) put on %d of %d keyframe(s)", pct, idx, done, h.n);
+		return done;
+	}
+
 	// From / To as ordinals. -1 means "this marker".
 	void resolveRange(const Here& h, int* a, int* b)
 	{

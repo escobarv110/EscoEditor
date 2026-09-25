@@ -15,7 +15,6 @@
 //        +0x138, reads its +0x90 INDEX and converts it with a switch:
 //        0->5 1->20 2->35 3->50 4->100 5->125 6->150 7->175 8->200, anything
 //        else -> 100. It is the only conversion the playback uses, which is
-//        what makes 5% steps possible: see ecs_clipspeed.inc.
 //    CVideoEditorPlayback::GetCurrentEditMarker  (rva 0x17B54C)
 //        GetCurrentClip()->vtable[+0xB0](g_EditMarkerIndex)
 // =========================================================================
@@ -79,6 +78,12 @@ namespace mk
 	constexpr uint32_t OFF_CamValid    = 0xB2;  // bool: pos/quat/fov above are authored
 	constexpr uint32_t SIZE            = 0xB8;
 
+	// A marker keeps its playback speed as an index into these nine values.
+	// The game's own switch turns the index into a percentage; anything it
+	// does not know plays at 100.
+	constexpr int kSpeedPercent[9] = { 5, 20, 35, 50, 100, 125, 150, 175, 200 };
+	inline int speedPercent(int idx) { return (idx >= 0 && idx < 9) ? kSpeedPercent[idx] : 100; }
+
 	constexpr int     BIT_Speed   = 1;
 	constexpr int     BIT_CamType = 10;
 	constexpr uint8_t CAM_FREE    = 6;
@@ -102,7 +107,7 @@ namespace st
 	constexpr uint32_t VT_Remove     = 0x28;   // void (u32 idx) - refuses idx 0, the last one, and a clip with <= 2 markers
 	constexpr uint32_t VT_CanPlace   = 0x38;   // bool (float timeMs, bool ignoreBoundary)
 	constexpr uint32_t VT_IncSpeed   = 0x70;   // void (u32 idx, s32 delta)
-	constexpr uint32_t VT_SpeedAt    = 0x80;   // u32 (float timeMs)          <- hooked by ecs_clipspeed
+	constexpr uint32_t VT_SpeedAt    = 0x80;   // u32 (float timeMs)          the playback's speed lookup
 	constexpr uint32_t VT_Recalc     = 0x88;   // void (u32 fromIdx)
 	constexpr uint32_t VT_TryGet     = 0xA8;   // sReplayMarkerInfo* (u32 idx)
 	constexpr uint32_t VT_Count      = 0x108;  // s32 ()

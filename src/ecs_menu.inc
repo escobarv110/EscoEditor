@@ -31,7 +31,6 @@
 //  row is recognised by its index AND that id, never by either alone.
 //
 //  The stock Speed row (option id 0x25) is also handled here: left/right on
-//  it go to ecs_clipspeed.inc and the row is relabelled after each populate.
 //
 //  Mechanism after Rockstar Editor+ (GPL-3, github.com/crxhvrd/REPlus); the
 //  patterns and interior offsets were verified on FiveM's b3407 image.
@@ -89,7 +88,7 @@ namespace menu
 	enum Kind { K_MARKER = 0, K_DOF };
 	enum Page { PAGE_CLOSED = 0, PAGE_CAMSPEED, PAGE_CLIPBOARD, PAGE_SCENE, PAGE_LIGHTS, PAGE_COUNT };
 	enum Row  { R_HEADER = 0, R_SPEED, R_VSPEED, R_LOOK, R_FREE,
-	            R_FROM, R_TO, R_COPY, R_CUT, R_PASTE, R_TIME, R_WEATHER,
+	            R_FROM, R_TO, R_COPY, R_CUT, R_PASTE, R_SPDALL, R_TIME, R_WEATHER,
 	            R_DCOPY, R_DPASTE, R_DALL, R_LOPEN, R_LKEY, R_LALL, R_COUNT };
 
 	int g_kind = K_MARKER;   // the column our rows are in right now
@@ -139,6 +138,7 @@ namespace menu
 		case PAGE_CLIPBOARD:
 			s_rows[s_shown++] = R_FROM; s_rows[s_shown++] = R_TO;
 			s_rows[s_shown++] = R_COPY; s_rows[s_shown++] = R_CUT; s_rows[s_shown++] = R_PASTE;
+			s_rows[s_shown++] = R_SPDALL;
 			break;
 		case PAGE_SCENE:
 			s_rows[s_shown++] = R_TIME; s_rows[s_shown++] = R_WEATHER;
@@ -207,6 +207,7 @@ namespace menu
 		case R_COPY:    return "Copy Keyframes";
 		case R_CUT:     return "Cut Keyframes";
 		case R_PASTE:   return "Paste Keyframes";
+		case R_SPDALL:  return "Speed To All";
 		case R_TIME:    return "Time of Day";
 		case R_WEATHER: return "Weather";
 		case R_DCOPY:   return "Copy DOF";
@@ -277,6 +278,13 @@ namespace menu
 		case R_COPY:    snprintf(buf, sizeof(buf), "Copy the keyframes. Clipboard: %s. %s", clipboard::summary(s, sizeof(s)), clipboard::g_last); return buf;
 		case R_CUT:     snprintf(buf, sizeof(buf), "Copy, then remove them when you paste. %s", clipboard::g_last); return buf;
 		case R_PASTE:   snprintf(buf, sizeof(buf), "Paste onto this keyframe, the rest follow. %s", clipboard::g_last); return buf;
+		case R_SPDALL:
+		{
+			const int pct = clipboard::speedHere();
+			if (pct < 0) snprintf(buf, sizeof(buf), "Put this keyframe's speed on every keyframe of the clip. %s", clipboard::g_last);
+			else snprintf(buf, sizeof(buf), "Put this keyframe's speed (%d%%) on every keyframe of the clip. %s", pct, clipboard::g_last);
+			return buf;
+		}
 		case R_TIME:    return "Clip time of day. As Recorded = the clip's own.";
 		case R_WEATHER: return "Clip weather. As Recorded = the clip's own.";
 		case R_DCOPY:   snprintf(buf, sizeof(buf), "Copy this keyframe's DOF. %s", dof::g_last); return buf;
@@ -359,6 +367,7 @@ namespace menu
 		case R_COPY:   clipboard::copy(false); return false;
 		case R_CUT:    clipboard::copy(true);  return false;
 		case R_PASTE:  return clipboard::paste();
+		case R_SPDALL: clipboard::speedToAll(); return false;
 		case R_DCOPY:  dof::copy();            return false;
 		case R_DPASTE: return dof::paste();          // the stock DOF rows show the new values after a rebuild
 		case R_DALL:   dof::applyToAll();      return false;
@@ -381,30 +390,6 @@ namespace menu
 	{
 		const int i = idx - g_first;
 		return (i >= 0 && i < s_shown) ? s_rows[i] : R_HEADER;
-	}
-
-	bool isStockSpeedRow(int idx)
-	{
-		if (idx < 0 || ownsRow(idx)) return false;
-		const auto* arr = (const MenuArray*)a_MenuOptions;
-		if (!arr->data || idx >= (int)arr->count) return false;
-		return arr->data[idx].id == clipspeed::kStockOptionId;
-	}
-
-	int stockSpeedRow()
-	{
-		const auto* arr = (const MenuArray*)a_MenuOptions;
-		if (!arr->data) return -1;
-		for (int i = 0; i < (int)arr->count; ++i)
-			if (arr->data[i].id == clipspeed::kStockOptionId && !ownsRow(i)) return i;
-		return -1;
-	}
-
-	const char* speedHelp(int pct)
-	{
-		static char buf[96];
-		snprintf(buf, sizeof(buf), "Clip speed %d%%. 5%% steps, 5%% to 1000%%.", pct);
-		return buf;
 	}
 
 	bool fromMouse()
@@ -473,24 +458,13 @@ namespace menu
 		((FnPopulate)a_PopulateMarkerMenu)((unsigned)focus);
 	}
 
-	void relabelSpeedRow()
-	{
-		if (!clipspeed::active()) return;
-		const int row = stockSpeedRow();
-		if (row < 0) return;
-		const int pct = clipspeed::currentPercent();
-		if (pct < 0) return;
-		char b[16];
-		updateText(row, clipspeed::label(pct, b, sizeof(b)));
-	}
-
 	// --- hooks -------------------------------------------------------------
 	void __fastcall hkPopulateMarker(unsigned focusToRestore)
 	{
 		const bool outer = !g_inMenu && !g_inDof;
 		if (outer) { g_inMenu = true; g_injected = false; }
 		origPopulateMarker(focusToRestore);
-		if (outer) { g_inMenu = false; relabelSpeedRow(); }
+		if (outer) g_inMenu = false;
 	}
 
 	void __fastcall hkPopulateDof(unsigned focusToRestore)
@@ -521,11 +495,6 @@ namespace menu
 		// A pick begun on the Light Editor Key row ends when the focus leaves the row.
 		if (lights::g_capture && lights::g_captureSrc == lights::CAP_MENU && r != R_LKEY) lights::cancelCapture(lights::END_CANCELLED, "Cancelled");
 		if (ours) { if (r == R_LKEY) refreshRow((int)idx, r); else emitHelp(rowHelp(r)); return; }
-		if (clipspeed::active() && isStockSpeedRow((int)idx))
-		{
-			const int pct = clipspeed::currentPercent();
-			if (pct >= 0) { emitHelp(speedHelp(pct)); return; }
-		}
 		origUpdateHelp(idx);
 	}
 
@@ -554,21 +523,6 @@ namespace menu
 			if (accept(r)) rebuild(focus);
 			else refreshRow(focus, r);
 			return;
-		}
-		if ((lr || acc) && clipspeed::active() && isStockSpeedRow(focus))
-		{
-			if (fromMouse()) return;
-			if (lr)
-			{
-				const int pct = clipspeed::step(nav == NAV_RIGHT ? 1 : -1);
-				if (pct >= 0)
-				{
-					char b[16];
-					updateText(focus, clipspeed::label(pct, b, sizeof(b)));
-					emitHelp(speedHelp(pct));
-					return;
-				}
-			}
 		}
 		origMenuInput(nav);
 	}

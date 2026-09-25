@@ -9,7 +9,7 @@ place in the picture with a 3D gizmo and key over the clip**.
 No ScriptHookV, no Rockstar Editor+, no Menyoo. One `.asi`, and it runs
 alongside Rockstar Editor+ if you use that too.
 
-<sub>Version 4.0 · GTA V b3258–b3751 and singleplayer b3407 · MIT</sub>
+<sub>Version 4.1 · GTA V b3258–b3751 and singleplayer b3407 · MIT</sub>
 
 ---
 
@@ -32,8 +32,8 @@ alongside Rockstar Editor+ if you use that too.
 * **Copy / Cut / Paste** a range of keyframes (markers) — everything on them:
   camera, DOF, time, weather, speed.
 * **Copy / Paste / To All** for the whole Depth of Field block of a keyframe.
-* The marker **Speed** row steps in 5% increments from 5% to 1000% instead of
-  the game's nine fixed steps.
+* **Speed To All** - the speed of the keyframe whose menu is open goes onto
+  every keyframe of the clip, so a whole sequence is set from one place.
 
 **Scene lights** — the big one
 
@@ -101,10 +101,10 @@ Visual Studio 2026 with the C++ workload (or any MSVC that has
 ```bat
 build.bat                     :: -> dist\EscoEditor.asi
 build\selftest\selftest.bat   :: builds the self-test
-build\selftest\selftest.exe <a cameras.ymt>
+build\selftest\selftest.exe            :: a cameras.ymt may be passed, but is not needed
 ```
 
-The self-test is 327 checks over the parts that can run outside the game: the
+The self-test is 128 checks over the parts that can run outside the game: the
 metadata parser, the light record, keyframe interpolation, the light file
 format, the entity pools, the marker clipboard, Free Look's snapshots, MinHook
 itself. It prints `SELFTEST: all checks passed` or the first thing that broke.
@@ -120,7 +120,6 @@ One translation unit — `src/main.cpp` includes the `.inc` files in order:
 | `ecs_clipboard.inc` | the keyframe clipboard |
 | `ecs_camfree.inc` | Free Look |
 | `ecs_scene.inc` | time of day and weather |
-| `ecs_clipspeed.inc` | the 5% marker speed steps |
 | `ecs_dof.inc` | depth of field copy / paste / to all |
 | `ecs_lights.inc` | the lights themselves: store, keyframes, records, pools |
 | `ecs_lightui.inc` | the light editor window and the 3D gizmo |

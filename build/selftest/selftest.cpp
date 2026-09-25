@@ -29,17 +29,56 @@ __declspec(noinline) int mhDetour(int x) { return mhOrig(x) * 10; }
 
 int main(int argc, char** argv)
 {
-    if (argc < 2) { puts("usage: selftest <cameras.ymt>"); return 2; }
-    FILE* f = nullptr;
-    if (fopen_s(&f, argv[1], "rb") != 0 || !f) { puts("cannot open"); return 2; }
-    fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET);
-    uint8_t* buf = (uint8_t*)VirtualAlloc(nullptr, n, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-    fread(buf, 1, n, f); fclose(f);
-    printf("loaded %ld bytes at %p\n", n, buf);
-    for (long i = 0; i + 4 <= n; i += 4)
+    // With a real cameras.ymt: load it and swap it out of PSO's big-endian
+    // words, which is how the block sits in the file. Without one: build the
+    // same block in memory, so the suite runs anywhere - the scanner does not
+    // care where the bytes came from.
+    long n = 0;
+    uint8_t* buf = nullptr;
+    if (argc >= 2)
     {
-        uint8_t t = buf[i]; buf[i] = buf[i + 3]; buf[i + 3] = t;
-        t = buf[i + 1]; buf[i + 1] = buf[i + 2]; buf[i + 2] = t;
+        FILE* f = nullptr;
+        if (fopen_s(&f, argv[1], "rb") != 0 || !f) { puts("cannot open"); return 2; }
+        fseek(f, 0, SEEK_END); n = ftell(f); fseek(f, 0, SEEK_SET);
+        buf = (uint8_t*)VirtualAlloc(nullptr, n, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+        if (fread(buf, 1, (size_t)n, f) != (size_t)n) { puts("short read"); return 2; }
+        fclose(f);
+        printf("loaded %ld bytes at %p\n", n, buf);
+        for (long i = 0; i + 4 <= n; i += 4)
+        {
+            uint8_t t = buf[i]; buf[i] = buf[i + 3]; buf[i + 3] = t;
+            t = buf[i + 1]; buf[i + 1] = buf[i + 2]; buf[i + 2] = t;
+        }
+    }
+    else
+    {
+        n = 0x8000;
+        buf = (uint8_t*)VirtualAlloc(nullptr, n, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+        memset(buf, 0, (size_t)n);
+        uint8_t* mb = buf + 0x10;                      // 16-byte aligned, as in the file
+        auto wu = [&](uint32_t off, uint32_t v) { memcpy(mb + off, &v, 4); };
+        auto wf = [&](uint32_t off, float v)    { memcpy(mb + off, &v, 4); };
+        wu(OFF_Name, kNameHash);
+        wu(OFF_CollRef, 0x8EC4EDE4u);
+        wu(OFF_DofRef,  0x4959CC61u);
+        wf(OFF_NearClip, 0.1f);
+        for (uint32_t off = OFF_RespH; off <= 0xD8; off += 0x18)
+        {
+            wf(off + RF_Power, 4.0f);
+            wf(off + RF_Accel, 30.0f);
+            wf(off + RF_Decel, 200.0f);
+            wf(off + RF_Speed, 1.0f);
+        }
+        wf(OFF_RespH + RF_Speed, 10.0f);               // the stock free camera
+        wf(OFF_RespV + RF_Speed, 10.0f);
+        wf(OFF_RespLook + RF_Speed, 4.0f);
+        wf(OFF_MouseMul, 3.0f);
+        wf(OFF_MaxPitch, 86.0f);
+        wf(OFF_MinFov, 10.0f);
+        wf(OFF_MaxFov, 100.0f);
+        wf(OFF_DefFov, 45.0f);
+        wf(OFF_Capsule, 0.31f);
+        printf("no cameras.ymt given - built the stock block in memory at %p\n", buf);
     }
 
     g_logOn = false;
@@ -529,11 +568,12 @@ int main(int argc, char** argv)
         CHECK(err < 1e-4f && rq::encode(rq::decode(packed)) == packed, "quaternion round trip");
     }
 
-    // ---- clip speed mapping -------------------------------------------------
+    // ---- the speed a marker keeps, as a percentage --------------------------
     {
-        for (int pct = 5; pct <= 1000; pct += 5)
-            CHECK(clipspeed::indexToPercent(clipspeed::percentToIndex(pct)) == pct, "percent %d round trip", pct);
-        CHECK(clipspeed::percentToIndex(100) == 4 && clipspeed::percentToIndex(105) == 30 && clipspeed::indexToPercent(-1) == 100, "index values");
+        CHECK(mk::speedPercent(0) == 5 && mk::speedPercent(4) == 100 && mk::speedPercent(8) == 200,
+              "the nine speeds the game stores by index");
+        CHECK(mk::speedPercent(-1) == 100 && mk::speedPercent(9) == 100 && mk::speedPercent(1000) == 100,
+              "anything the game does not know reads as 100 percent, the way its own switch defaults");
     }
 
     // ---- weather / clock packet patching ----------------------------------

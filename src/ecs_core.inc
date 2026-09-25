@@ -1,4 +1,4 @@
-	constexpr const char* kVersion = "4.0";
+	constexpr const char* kVersion = "4.1";
 
 	// ------------------------------------------------------------------ paths
 	char    g_dir[MAX_PATH]  = {};   // folder of the .asi, trailing backslash
@@ -40,7 +40,7 @@
 		bool  menuRows  = true;   // rows in the editor's marker menu (needs 4 code hooks)
 		bool  log       = true;
 		int   menuPage  = 1;      // EscoEditor page shown by default (0 closed, 1 Camera Speed, 2 Copy & Paste, 3 Time & Weather, 4 Lights)
-		bool  clipSpeed = true;   // take over the stock Speed row: 5% steps, 5% .. 1000%
+   // take over the stock Speed row: 5% steps, 5% .. 1000%
 		bool  scene     = true;   // Time of Day / Weather rows
 		bool  lights    = true;   // scene lights, and the light editor on KeyLights
 		int   keyLights = 0x4C;   // L
@@ -65,7 +65,6 @@
 		"Response=1           ; 0 stock ramp, 1 ramp scales with the speed, 2 instant start/stop\r\n"
 		"MenuRows=1           ; 1 = the EscoEditor rows in the editor's marker menu, 0 = keys only\r\n"
 	"MenuPage=1           ; page EscoEditor opens on: 0 closed, 1 Camera Speed, 2 Copy & Paste, 3 Time & Weather, 4 Lights\r\n"
-	"ClipSpeed=1          ; 1 = the marker Speed row steps 5% at a time from 5% to 1000%, 0 = the game's own 9 steps\r\n"
 	"Scene=1              ; 1 = Time of Day / Weather rows, 0 = off\r\n"
 	"Lights=1             ; 1 = scene lights in the Rockstar Editor, placed in the light editor (its window needs ReShade with add-on support)\r\n"
 	"KeyLights=0x4C       ; L - opens / closes the light editor inside a clip (the Lights page of the menu changes it)\r\n"
@@ -168,7 +167,7 @@
 	void dropRetiredKeys()
 	{
 		static const char* const kRetired[] = {
-			"EscoDOF", "DofAmount", "DofSmooth", "DofNear", "DofQuality", "DofBokeh", "DofAnamorphic",
+			"ClipSpeed", "EscoDOF", "DofAmount", "DofSmooth", "DofNear", "DofQuality", "DofBokeh", "DofAnamorphic",
 			"DofAnamorphicAmount", "DofStretch", "DofChroma", "DofRadial", "DofHighlight", "DofPage", "DofEngine" };
 		for (const char* key : kRetired)
 		{
@@ -205,7 +204,6 @@
 		g_cfg.menuRows  = iniInt("MenuRows",        1, 0, 1) != 0;
 		g_cfg.log       = iniInt("Log",             1, 0, 1) != 0;
 		g_cfg.menuPage  = iniInt("MenuPage",        1, 0, 4);
-		g_cfg.clipSpeed = iniInt("ClipSpeed",       1, 0, 1) != 0;
 		g_cfg.scene     = iniInt("Scene",           1, 0, 1) != 0;
 		g_cfg.lights    = iniInt("Lights",          1, 0, 1) != 0;
 		g_cfg.keyLights = iniInt("KeyLights",       g_cfg.keyLights, 0, 0xFE);

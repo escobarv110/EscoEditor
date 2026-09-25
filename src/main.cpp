@@ -35,7 +35,6 @@
 //    ecs_camfree.inc    Free Look: fly at a keyframe without changing its
 //                       camera, and switch back to the camera it renders
 //    ecs_scene.inc      time of day / weather override
-//    ecs_clipspeed.inc  the 5% marker speed steps
 //    ecs_dof.inc        depth of field: copy / paste / to all
 //    ecs_reshade.inc    EscoEditor as a ReShade add-on: ReShade's ImGui for the
 //                       light editor, and an EscoEditor tab in ReShade's menu
@@ -81,7 +80,6 @@ namespace
 #include "ecs_clipboard.inc"
 #include "ecs_camfree.inc"
 #include "ecs_scene.inc"
-#include "ecs_clipspeed.inc"
 #include "ecs_dof.inc"
 #include "ecs_lights.inc"
 #include "ecs_lightui.inc"
