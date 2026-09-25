@@ -928,12 +928,14 @@ namespace lightui
 			const char* name = enbdof::menuLabel(i);
 			if (i == enbdof::I_FOCUS)
 			{
-				int m = v > 0.5f ? 1 : 0;
+				const int m = enbdof::focusModeOf(v);
 				ImGui::TextUnformatted("Focus Mode");
 				ImGui::SameLine();
-				if (ImGui::RadioButton("Auto", m == 0)) v = 0.0f;
+				if (ImGui::RadioButton("Auto", m == enbdof::FM_AUTO)) v = (float)enbdof::FM_AUTO;
 				ImGui::SameLine();
-				if (ImGui::RadioButton("Manual", m == 1)) v = 1.0f;
+				if (ImGui::RadioButton("Manual", m == enbdof::FM_MANUAL)) v = (float)enbdof::FM_MANUAL;
+				ImGui::SameLine();
+				if (ImGui::RadioButton("Player", m == enbdof::FM_PLAYER)) v = (float)enbdof::FM_PLAYER;
 			}
 			else if (d.kind == enbdof::K_BOOL)
 			{
@@ -953,9 +955,9 @@ namespace lightui
 			if (enbdof::hint(i)[0]) tip(enbdof::hint(i));
 			ImGui::PopID();
 		};
-		const bool autoF = enbdof::s_known[enbdof::I_FOCUS] ? enbdof::s_manual[enbdof::I_FOCUS] < 0.5f : enbdof::techAuto();
-		const int mainOpts[] = { enbdof::I_FOCUS, autoF ? -1 : enbdof::I_DIST, autoF ? enbdof::I_AUTO_APERTURE : enbdof::I_APERTURE,
-								 12, 14, enbdof::I_NEAR, autoF ? enbdof::I_AUTO_NEARPOWER : enbdof::I_NEARPOWER, 11, 17, 18 };
+		const bool manualF = enbdof::focusModeOf(enbdof::s_manual[enbdof::I_FOCUS]) == enbdof::FM_MANUAL;
+		const int mainOpts[] = { enbdof::I_FOCUS, manualF ? enbdof::I_DIST : -1, enbdof::I_APERTURE,
+								 14, 12, enbdof::I_NEAR, enbdof::I_NEARPOWER, 11, 17, 18 };
 		bool isMain[enbdof::N] = {};
 		for (int i : mainOpts) if (i >= 0) { isMain[i] = true; option(i); }
 		if (ImGui::TreeNode("More ENB options"))

@@ -49,7 +49,7 @@ namespace enbdof
 		{ "--> Click here to enable Mouse Focus",       K_BOOL,   0.0f,    1.0f, "Mouse focus" },
 		{ "--> Blur the near field toggle",             K_BOOL,   0.0f,    1.0f, "Near field blur" },
 		{ "--> Near field intensity",                   K_FLOAT,  0.0f, 1000.0f, "Near field power" },
-		{ "--> Manual Focus : Distance",                K_FLOAT,  0.1f, 2000.0f, "Focus distance (m)" },
+		{ "--> Manual Focus : Distance",                K_FLOAT,  0.3f,  200.0f, "Focus distance (m)" },
 		{ "--> Manual Focus : Aperture",                K_FLOAT,  0.0f,   10.0f, "Aperture" },
 		{ "--> Manual Focus : Near field power",        K_FLOAT,  0.0f, 1000.0f, "Near field power" },
 		{ "--> Auto-focus : Aperture",                  K_FLOAT,  0.0f,   10.0f, "Auto-focus aperture" },
@@ -82,12 +82,16 @@ namespace enbdof
 		// Not a shader variable: which of NVE's techniques ENB runs, 0 its
 		// "Gameplay DOF Auto-focus", 1 its "Gameplay DOF Manual". Per keyframe
 		// this is Focus Mode Auto / Manual.
-		{ "TECHNIQUE",                                  K_ENUM,   0.0f,    1.0f, "Focus mode" },
+		{ "TECHNIQUE",                                  K_ENUM,   0.0f,    2.0f, "Focus mode" },
 	};
 	enum { I_MOUSE = 0, I_NEAR = 1, I_AUTO_NEARPOWER = 2, I_DIST = 3, I_APERTURE = 4, I_NEARPOWER = 5, I_AUTO_APERTURE = 6,
 	       I_SEC_NEAR = 23, I_SEC_MANUAL = 24, I_SEC_AUTO = 25, I_SEC_BLUR = 26, I_SEC_QUALITY = 27, I_SEC_MISC = 28,
 	       I_FOCUS = 29 };
 	inline bool isLabel(int i) { return i >= I_SEC_NEAR && i <= I_SEC_MISC; }
+	// Focus Mode, per keyframe (EscoEditor's own - NVE always runs its Manual
+	// technique): the middle of the picture, a distance, or the player.
+	enum { FM_AUTO = 0, FM_MANUAL = 1, FM_PLAYER = 2 };
+	inline int focusModeOf(float v) { const int m = (int)floorf(v + 0.5f); return m < FM_AUTO ? FM_AUTO : m > FM_PLAYER ? FM_PLAYER : m; }
 
 	// Three rows stand for more than one ENB option each (4.13):
 	//   Aperture         a percentage. NVE's two techniques read two different
@@ -99,21 +103,23 @@ namespace enbdof
 	enum { V_APERTURE = 100, V_NEAR = 101, V_ANAMORPHIC = 102 };
 	inline bool isVirtual(int p) { return p >= V_APERTURE && p <= V_ANAMORPHIC; }
 	inline float clampf(float v, float lo, float hi) { return v < lo ? lo : v > hi ? hi : v; }
-	// Aperture is THE blur amount (4.15): 0% no blur at all, 100% the most NVE
-	// draws. NVE's blur is three numbers together - its aperture (how soon
-	// things go soft past the focus), DOF : Maximum size (the radius the blur
-	// can reach, 2..20) and Blur : Size (a softening pass over it, 0..2) - so
-	// the one percentage sets all three (blurSizesFor), and the menu has no
-	// separate size rows. Stored as NVE's aperture: 0.12 at 100%.
+	// Aperture is THE blur amount: 0% no blur at all, 100% the most. NVE's own
+	// aperture is spent by about 0.1 - past that, everything behind the focus
+	// is already as blurred as it gets - so the blur you see is set by two more
+	// numbers: DOF : Maximum size (how far the blur reaches, 2..20) and Blur :
+	// Size (a softening over it, 0..2). Since 4.18 those two rows are what the
+	// blur is at 100%, and the Aperture scales all three together, so it works
+	// whatever the size rows say (4.17's "Auto" sizes stopped following it as
+	// soon as a keyframe had sizes of its own - then Aperture did next to
+	// nothing). Stored as NVE's aperture: 0.12 at 100%.
 	constexpr float kApertureFull = 0.12f;
 	inline float manualFromPct(float pc) { return kApertureFull * clampf(pc, 0.0f, 100.0f) / 100.0f; }
 	inline float pctManual(float a)      { return clampf(a / kApertureFull, 0.0f, 1.0f) * 100.0f; }
-	// Maximum size and Blur size for an aperture, as the percentage says.
-	inline void blurSizesFor(float a, float* maxSize, float* blurSize)
+	inline void blurSizesFor(float a, float userMax, float userBlur, float* maxSize, float* blurSize)
 	{
 		const float f = clampf(a / kApertureFull, 0.0f, 1.0f);
-		*maxSize = 2.0f + 18.0f * f;
-		*blurSize = 2.0f * f;
+		*maxSize = 2.0f + (clampf(userMax, 2.0f, 20.0f) - 2.0f) * f;
+		*blurSize = clampf(userBlur, 0.0f, 2.0f) * f;
 	}
 	// Auto-focus compares raw depths: its blur also shrinks as the focus moves off.
 	inline float autoFromPct(float pc)   { return clampf(pc, 0.0f, 100.0f) / 10.0f; }
@@ -236,6 +242,7 @@ namespace enbdof
 	volatile ULONGLONG s_centreAt = 0;
 	float s_autoD = 0.0f;                 // the smoothed Distance Auto sends
 	ULONGLONG s_autoAt = 0;
+	float     s_autoClip = -1.0f;         // the clip clock at the last ease (4.18)
 	int   s_autoLogs = 0;
 
 	void setCentre(float d)
@@ -620,6 +627,196 @@ namespace enbdof
 		if (line) snprintf(line, cap, "keyframe DOF Custom: focal distance %.2f m, intensity %.0f%%", d, pct);
 	}
 
+	// ---- the player (Focus Mode Player, 4.18) ------------------------------------
+	// Which ped is the player during a replay? Two ways, and the log says which:
+	//  1. the ped that carries player data. A player's ped points to its player
+	//     record and the record points back to the ped; other peds have nothing
+	//     there. Where those two pointers sit is learned from the pool itself:
+	//     of every (ped+A -> record, record+B -> ped) pair, the one exactly one
+	//     ped has, with several peds around. A ped far from the camera is not
+	//     it (the real player waits, hidden, while the replay plays).
+	//  2. otherwise the character nearest the middle of the picture - and once
+	//     picked, the same one, as long as it stays in view.
+	// The focus is its chest, measured along the camera's view.
+	volatile float     s_playerMetres = 0.0f;
+	volatile ULONGLONG s_playerAt = 0;
+	void*    s_plPed = nullptr;
+	uint32_t s_plModel = 0;
+	int      s_linkA = -1, s_linkB = -1;       // learned: ped+A -> player data, data+B -> the ped
+	int      s_linkTries = 0;
+	int      s_plLogs = 0, s_plHow = 0;          // 0 none, 1 player data, 2 nearest the middle
+	ULONGLONG s_nextLearn = 0;
+
+	bool playerFresh() { return s_playerAt && GetTickCount64() - s_playerAt < 750; }
+
+	inline bool plausiblePtr(uintptr_t v) { return v > 0x10000 && v < 0x00007FFFFFFFFFFFull && (v & 7) == 0; }
+
+	// Does ped+a point to something that points back to the ped at +b?
+	bool linkHolds(const uint8_t* ped, int a, int b)
+	{
+		__try
+		{
+			const uintptr_t r = *(const uintptr_t*)(ped + a);
+			if (!plausiblePtr(r)) return false;
+			return *(const uintptr_t*)(r + b) == (uintptr_t)ped;
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+	}
+
+	// Learn the player-data link from these peds (pure enough to be tested):
+	// the (A, B) pair exactly one of them has. Needs at least four peds, or
+	// every link of a lone ped would look unique.
+	constexpr int kLinkA0 = 0x1000, kLinkA1 = 0x1200, kLinkB0 = 0x100, kLinkB1 = 0x400;
+	constexpr int kLinkNA = (kLinkA1 - kLinkA0) / 8, kLinkNB = (kLinkB1 - kLinkB0) / 8;
+	uint16_t s_linkCount[kLinkNA][kLinkNB];
+	void*    s_linkFirst[kLinkNA][kLinkNB];
+
+	// Every pair one ped has: ped+A read once, then the record scanned for the ped.
+	void countLinks(const uint8_t* ped)
+	{
+		for (int a = 0; a < kLinkNA; ++a)
+		{
+			uintptr_t r = 0;
+			__try { r = *(const uintptr_t*)(ped + kLinkA0 + a * 8); }
+			__except (EXCEPTION_EXECUTE_HANDLER) { r = 0; }
+			if (!plausiblePtr(r)) continue;
+			if (r >= (uintptr_t)ped && r < (uintptr_t)ped + 0x2000) continue;     // a pointer inside the ped itself
+			__try
+			{
+				for (int b = 0; b < kLinkNB; ++b)
+					if (*(const uintptr_t*)(r + kLinkB0 + b * 8) == (uintptr_t)ped && s_linkCount[a][b]++ == 0) s_linkFirst[a][b] = (void*)ped;
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER) {}
+		}
+	}
+
+	bool learnLink(void* const* peds, int n, int* outA, int* outB, void** who)
+	{
+		if (n < 4) return false;
+		memset(s_linkCount, 0, sizeof(s_linkCount));
+		for (int i = 0; i < n; ++i) countLinks((const uint8_t*)peds[i]);
+		int bestA = -1, bestB = -1;
+		void* only = nullptr;
+		for (int a = 0; a < kLinkNA; ++a)
+			for (int b = 0; b < kLinkNB; ++b)
+			{
+				if (s_linkCount[a][b] != 1) continue;
+				if (!only) { only = s_linkFirst[a][b]; bestA = kLinkA0 + a * 8; bestB = kLinkB0 + b * 8; }
+				else if (s_linkFirst[a][b] != only) return false;    // two peds, each with a link of its own: no answer
+			}
+		if (!only) return false;
+		*outA = bestA; *outB = bestB; if (who) *who = only;
+		return true;
+	}
+
+	// The character nearest the middle of the picture (pure): the smallest angle
+	// off the view, in front of the camera, within 120 m. -1 when none.
+	int nearestToCentre(const float* cam, const float* fwd, const float (*pos)[3], int n, float* zOut)
+	{
+		int best = -1;
+		float bestT = 0.0f;
+		for (int i = 0; i < n; ++i)
+		{
+			const float v[3] = { pos[i][0] - cam[0], pos[i][1] - cam[1], pos[i][2] - cam[2] };
+			const float z = v[0] * fwd[0] + v[1] * fwd[1] + v[2] * fwd[2];
+			if (z < 0.3f || z > 120.0f) continue;
+			const float l2 = v[0] * v[0] + v[1] * v[1] + v[2] * v[2] - z * z;
+			const float tanA = sqrtf(l2 > 0.0f ? l2 : 0.0f) / z;
+			if (tanA > 0.7f) continue;                         // about 35 degrees off the middle
+			if (best < 0 || tanA < bestT) { best = i; bestT = tanA; if (zOut) *zOut = z; }
+		}
+		return best;
+	}
+
+	// Its chest, and how far that is along the view.
+	bool chestOf(void* ped, const lights::Cam& cam, float* z, float* at)
+	{
+		lights::Frame f;
+		if (!lights::frameOfEntity(ped, f)) return false;
+		for (int k = 0; k < 3; ++k) at[k] = f.d[k] + f.c[k] * 0.45f;
+		const float v[3] = { at[0] - cam.pos[0], at[1] - cam.pos[1], at[2] - cam.pos[2] };
+		*z = v[0] * cam.fwd[0] + v[1] * cam.fwd[1] + v[2] * cam.fwd[2];
+		return true;
+	}
+
+	// Every frame on the game thread while the ENB option is on.
+	void trackPlayer()
+	{
+		const lights::Ctx c = lights::ctx();
+		if (!c.valid || GetTickCount64() - c.at > 500) return;
+		lights::PoolView v;
+		if (!lights::poolView(lights::E_PED, v) || v.size <= 0) return;
+		constexpr int kMax = 256;
+		void* peds[kMax];
+		float pos[kMax][3];
+		int n = 0;
+		for (int i = 0; i < v.size && n < kMax; ++i)
+		{
+			void* e = lights::slotAt(v, i);
+			if (!e) continue;
+			float z, at[3];
+			if (!chestOf(e, c.cam, &z, at)) continue;
+			peds[n] = e;
+			memcpy(pos[n], at, sizeof(at));
+			++n;
+		}
+		if (n <= 0) return;
+
+		// 1. the ped with player data
+		const ULONGLONG now = GetTickCount64();
+		if (s_linkA < 0 && s_linkTries < 3 && now >= s_nextLearn && n >= 4)
+		{
+			// a few tries, 20 s apart: the scene may hold too few peds at first
+			++s_linkTries;
+			s_nextLearn = now + 20000;
+			void* who = nullptr;
+			if (learnLink(peds, n, &s_linkA, &s_linkB, &who))
+				logf("enb: Player focus - one ped of %d carries player data (ped+0x%X -> its record, record+0x%X -> the ped); that is the player", n, s_linkA, s_linkB);
+			else if (s_linkTries == 1)
+				logf("enb: Player focus - no ped of %d carries player data during the replay; the player is the character nearest the middle of the picture", n);
+		}
+		void* found = nullptr;
+		int how = 0;
+		if (s_linkA >= 0)
+		{
+			int holders = 0;
+			for (int i = 0; i < n; ++i)
+				if (linkHolds((const uint8_t*)peds[i], s_linkA, s_linkB)) { ++holders; found = peds[i]; }
+			if (holders > 1) { found = nullptr; s_linkA = -1; logf("enb: Player focus - %d peds share that link, so it is not player data; looking again", holders); }
+			float z = 0.0f, at[3];
+			if (found && (!chestOf(found, c.cam, &z, at) || z < 0.3f || z > 300.0f)) found = nullptr;   // the hidden real player, far away
+			if (found) how = 1;
+		}
+		// 2. the character nearest the middle, kept while it stays in view
+		if (!found && s_plPed && lights::modelOf(s_plPed) == s_plModel)
+		{
+			for (int i = 0; i < n; ++i)
+				if (peds[i] == s_plPed)
+				{
+					float z, at[3];
+					if (chestOf(s_plPed, c.cam, &z, at) && z > 0.3f && z < 150.0f) { found = s_plPed; how = 2; }
+					break;
+				}
+		}
+		if (!found)
+		{
+			const int k = nearestToCentre(c.cam.pos, c.cam.fwd, (const float(*)[3])pos, n, nullptr);
+			if (k >= 0) { found = peds[k]; how = 2; }
+		}
+		if (!found) return;
+		float z, at[3];
+		if (!chestOf(found, c.cam, &z, at) || z < 0.3f) return;
+		if (found != s_plPed || how != s_plHow)
+		{
+			if (s_plLogs < 6) { ++s_plLogs; logf("enb: Player focus follows %s, %.1f m away", how == 1 ? "the ped with player data" : "the character nearest the middle of the picture", z); }
+			s_plPed = found;
+			s_plModel = lights::modelOf(found);
+			s_plHow = how;
+		}
+		s_playerMetres = z;
+		s_playerAt = GetTickCount64();
+	}
+
 	// ---- one frame -------------------------------------------------------------
 	// What ENB should hold, computed on the game thread and published; pushed
 	// from ENB's thread. A snapshot older than a second is not trusted - an
@@ -710,6 +907,7 @@ namespace enbdof
 
 	ULONGLONG s_nextVerify = 0;
 	int s_resetLogs = 0;
+	bool s_techPush = true;                  // ENB takes TECHNIQUE (the nudge to its Manual technique)
 
 	void push()
 	{
@@ -738,20 +936,36 @@ namespace enbdof
 			}
 		}
 		const float n = nearClip();
-		// Auto: NVE's Distance follows what is in the middle of the picture,
-		// eased so the focus pulls rather than jumps (about a quarter second).
-		const bool autoF = s_known[I_FOCUS] ? w.v[I_FOCUS] < 0.5f : false;
+		// Auto: NVE's Distance follows what is in the middle of the picture;
+		// Player: the player's chest (the middle of the picture while no player
+		// is found). Eased, so the focus pulls rather than jumps (about a
+		// quarter second).
+		const int fm = s_known[I_FOCUS] ? focusModeOf(w.v[I_FOCUS]) : FM_MANUAL;
+		const bool autoF = fm == FM_AUTO || fm == FM_PLAYER;
 		float autoD = 0.0f;
-		if (autoF && centreFresh())
+		const bool byPlayer = fm == FM_PLAYER && playerFresh();
+		if (byPlayer || (autoF && centreFresh()))
 		{
-			const float target = distanceForRaw(s_centreRaw);
+			const float target = byPlayer ? enbDistance(clampf(s_playerMetres, 0.3f, 200.0f), n) : distanceForRaw(s_centreRaw);
+			// Eased on the CLIP's clock, so an export - the editor's, or Rockstar
+			// Editor+'s frame-by-frame render at whatever speed the PC manages -
+			// pulls focus exactly as the playback did. A jump (a seek, the next
+			// clip) snaps; a paused clip settles on the real clock instead.
 			const ULONGLONG t = GetTickCount64();
-			const float dt = s_autoAt ? (float)(t - s_autoAt) * 0.001f : 1.0f;
+			const float clip = game::replayTimeMs();
+			float dt;
+			if (s_autoClip >= 0.0f && clip != s_autoClip)
+			{
+				const float d = fabsf(clip - s_autoClip);
+				dt = d > 500.0f ? 1.0f : d * 0.001f;
+			}
+			else dt = s_autoAt ? (float)(t - s_autoAt) * 0.001f : 1.0f;
+			s_autoClip = clip;
 			s_autoAt = t;
 			const float k = dt >= 0.25f ? 1.0f : dt / 0.25f;
 			s_autoD = s_autoD > 0.0f ? s_autoD + (target - s_autoD) * k : target;
 			autoD = s_autoD;
-			if (s_autoLogs < 3) { ++s_autoLogs; logf("enb: Auto focus - the middle of the picture is at depth %.5f, about %.1f m: NVE's Distance %.2f", s_centreRaw, centreMetres(), target); }
+			if (s_autoLogs < 3 && !byPlayer) { ++s_autoLogs; logf("enb: Auto focus - the middle of the picture is at depth %.5f, about %.1f m: NVE's Distance %.2f", s_centreRaw, centreMetres(), target); }
 		}
 		else if (autoF && s_autoLogs < 3 && GetTickCount64() > 60000)
 		{
@@ -759,18 +973,19 @@ namespace enbdof
 			logf("enb: Auto focus has nothing measured - it needs ReShade with EscoFlare.fx (its EscoFocus pass). The keyframe's Focus Distance is used meanwhile.");
 		}
 		float sizeMax = 0.0f, sizeBlur = 0.0f;
-		blurSizesFor(w.v[I_APERTURE], &sizeMax, &sizeBlur);
+		blurSizesFor(w.v[I_APERTURE], w.v[14], w.v[12], &sizeMax, &sizeBlur);
 		for (int i = 0; i < N; ++i)
 		{
 			if (!s_known[i]) continue;
-			// NVE always runs its Manual technique (TECHNIQUE 1); Auto is ours.
-			// Maximum size and Blur size are the Aperture's (4.15).
+			if (i == I_FOCUS && !s_techPush) continue;
+			// NVE always runs its Manual technique (TECHNIQUE 1); Auto and Player
+			// are ours. The sizes are the keyframe's, scaled by the Aperture.
 			const float out = i == I_FOCUS ? (float)TECH_MANUAL
 							: i == I_MOUSE ? 0.0f
-							: i == 14 && !(w.filled & (1u << 14)) ? sizeMax      // Auto: follows the Aperture
-							: i == 12 && !(w.filled & (1u << 12)) ? sizeBlur
+							: i == 14 ? sizeMax
+							: i == 12 ? sizeBlur
 							: i == I_APERTURE ? clampf(w.v[i], 0.0f, kApertureFull) // an old key's 1.38 is 100%, not a paper-thin focus
-							: i == I_DIST ? (autoD > 0.0f ? autoD : enbDistance(w.v[i], n))   // metres -> NVE's Distance
+							: i == I_DIST ? (autoD > 0.0f ? autoD : enbDistance(clampf(w.v[i], 0.3f, 200.0f), n))   // metres -> NVE's Distance
 							: w.v[i];
 			if (s_havePushed[i] && same(i, s_pushed[i], out)) continue;
 			if (writeValue(i, out))
@@ -793,9 +1008,8 @@ namespace enbdof
 			}
 			else if (i == I_FOCUS)
 			{
-				s_known[I_FOCUS] = false;
-				logf("enb: ENB would not switch its technique through the SDK - Focus Mode is out of the menu; "
-					 "pick Auto-focus or Manual in ENB's own window (TECHNIQUE of enbdepthoffield.fx)");
+				s_techPush = false;             // Focus Mode is ours; only the nudge to Manual is dropped
+				logf("enb: ENB would not take TECHNIQUE through the SDK - make sure its technique is \"Gameplay DOF Manual\" in ENB's window");
 			}
 			else if (s_setFails++ < 3) logf("enb: ENB would not take \"%s\"", kDefs[i].ui);
 		}
@@ -828,6 +1042,7 @@ namespace enbdof
 	void fromGame()
 	{
 		if (!s_ready) return;
+		if (g_cfg.enbDof) trackPlayer();
 		Want w;
 		compute(w);
 		lights::seqWrite(s_want, s_wantSeq, w);
@@ -847,23 +1062,24 @@ namespace enbdof
 	int g_scroll = 0;                     // the first option shown
 
 	float valueHere(int p, bool* own);
-	bool focusAutoHere()
+	int focusModeHere()
 	{
 		bool own;
-		if (s_known[I_FOCUS]) return valueHere(I_FOCUS, &own) < 0.5f;
-		return techAuto();
+		if (s_known[I_FOCUS]) return focusModeOf(valueHere(I_FOCUS, &own));
+		return techAuto() ? FM_AUTO : FM_MANUAL;
 	}
+	bool focusAutoHere() { return focusModeHere() == FM_AUTO; }
 
 	void buildList()
 	{
-		const bool autoF = focusAutoHere();
+		const int fm = focusModeHere();
 		s_listN = 0;
 		auto add = [&](int p) { if ((isVirtual(p) || s_known[p]) && s_listN < 16) s_list[s_listN++] = p; };
 		add(I_FOCUS);
-		if (!autoF) add(I_DIST);
+		if (fm == FM_MANUAL) add(I_DIST);
 		if (s_known[I_APERTURE]) add(V_APERTURE);
-		add(12);                                          // Blur : Size         - Auto follows the Aperture
-		add(14);                                          // DOF : Maximum size  - Auto follows the Aperture
+		add(14);                                          // DOF : Maximum size  - what the blur reaches at 100%
+		add(12);                                          // Blur : Size         - its softening at 100%
 		add(I_NEAR);                                      // Near Field Blur: On / Off
 		{
 			bool o;
@@ -952,35 +1168,50 @@ namespace enbdof
 		if (isVirtual(p)) return virtualHere(p, own);
 		float t;
 		if (p < 0 || p >= N) return 0.0f;
-		if (!markerTimeNow(&t))
-		{
-			if (p != 12 && p != 14) return s_manual[p];
-			float mx, bs;                            // no keyframe open: the sizes the session's Aperture gives
-			blurSizesFor(clampf(s_manual[I_APERTURE], 0.0f, kApertureFull), &mx, &bs);
-			return p == 14 ? mx : bs;
-		}
+		if (!markerTimeNow(&t)) return p == I_DIST ? clampf(s_manual[p], kDefs[p].lo, kDefs[p].hi) : s_manual[p];
 		{
 			lights::Lock lk;
 			float v;
-			if (lights::g_cur && lights::enbKeyValue(lights::g_cur->enb, t, p, &v)) { *own = true; return v; }
+			if (lights::g_cur && lights::enbKeyValue(lights::g_cur->enb, t, p, &v)) { *own = true; return p == I_DIST ? clampf(v, kDefs[p].lo, kDefs[p].hi) : v; }
 		}
 		Want w;
 		computeAt(t, w);
-		if ((p == 12 || p == 14) && !(w.filled & (1u << p)))
-		{
-			float mx, bs;
-			blurSizesFor(clampf(w.v[I_APERTURE], 0.0f, kApertureFull), &mx, &bs);
-			return p == 14 ? mx : bs;
-		}
-		return w.v[p];
+		return p == I_DIST ? clampf(w.v[p], kDefs[p].lo, kDefs[p].hi) : w.v[p];
 	}
 
 	// `delta` is +-1 a press, more while it is held.
+	// A Focus Distance step that suits where it is: 5 cm under a metre, 10 m
+	// past a hundred. 4.17 moved it by 10% of itself, and a held key took it
+	// to hundreds of metres in a second - where it stayed, behind everything.
+	inline float distStep(float x)
+	{
+		return x < 1.0f ? 0.05f : x < 3.0f ? 0.1f : x < 10.0f ? 0.25f : x < 30.0f ? 1.0f : x < 100.0f ? 5.0f : 10.0f;
+	}
+
 	float stepped(int p, float cur, int delta)
 	{
 		const Def& d = kDefs[p];
 		float v;
-		if (d.kind == K_BOOL || d.kind == K_ENUM) v = cur > 0.5f ? 0.0f : 1.0f;
+		if (p == I_DIST)
+		{
+			float x = clampf(cur, d.lo, d.hi);
+			const int dir = delta > 0 ? 1 : -1;
+			for (int k = 0, n = delta > 0 ? delta : -delta; k < n; ++k)
+			{
+				const float st = distStep(dir > 0 ? x : x - 0.001f);
+				x = floorf((x + (float)dir * st) / st + 0.5f) * st;
+				x = clampf(x, d.lo, d.hi);
+			}
+			return floorf(x * 100.0f + 0.5f) / 100.0f;
+		}
+		if (d.kind == K_ENUM)
+		{
+			// a choice cycles, one a press however long the key is held
+			const int count = (int)(d.hi - d.lo + 1.5f);
+			const int c = (int)floorf(cur - d.lo + 0.5f);
+			return d.lo + (float)(((c + (delta > 0 ? 1 : -1)) % count + count) % count);
+		}
+		if (d.kind == K_BOOL) v = cur > 0.5f ? 0.0f : 1.0f;
 		else if (kStep[p] == 0.0f)
 		{
 			const float small = (d.hi - d.lo) * 0.0005f;    // where 10% of itself stops meaning anything
@@ -996,7 +1227,40 @@ namespace enbdof
 		return v;
 	}
 
-	// Left / right on an option row: this keyframe gets its own value.
+	int s_keyFullLogs = 0;
+
+	// The keyframes a change goes to: this one, or with ENB set to All
+	// Keyframes every keyframe of the clip (4.18).
+	int markerTimes(float* out, int cap)
+	{
+		void* st = game::replayStorage();
+		const int n = st ? st::count(st) : 0;
+		if (n <= 0 || n > 4096) return 0;
+		int k = 0;
+		for (int i = 0; i < n && k < cap; ++i)
+		{
+			const void* m = st::tryGet(st, i);
+			if (!m) continue;
+			EdDof d;
+			readDof(m, d);
+			if (d.have) out[k++] = d.t;
+		}
+		return k;
+	}
+
+	int targetsFor(float t, float* out, int cap)
+	{
+		if (g_cfg.enbAll)
+		{
+			const int n = markerTimes(out, cap);
+			if (n > 0) return n;
+		}
+		out[0] = t;
+		return 1;
+	}
+
+	// Left / right on an option row: this keyframe gets its own value - or,
+	// with All Keyframes, every keyframe gets the same.
 	void stepHere(int p, int delta)
 	{
 		float t;
@@ -1010,7 +1274,13 @@ namespace enbdof
 		const bool a = false;                // 4.14: NVE runs its Manual technique, Auto included
 		const float cur = valueHere(p, &own);
 		bool ch = false;
-		auto put = [&](int q, float v) { if (lights::setEnbParam(tr, t, q, v, w.v)) ch = true; };
+		float targets[256];
+		const int nt = targetsFor(t, targets, 256);
+		int misses = 0;
+		auto put = [&](int q, float v) {
+			for (int k = 0; k < nt; ++k)
+				if (lights::setEnbParam(tr, targets[k], q, v, w.v)) ch = true; else ++misses;
+		};
 		switch (p)
 		{
 		case V_APERTURE:
@@ -1036,12 +1306,23 @@ namespace enbdof
 			break;
 		}
 		case I_FOCUS:
-			put(I_FOCUS, stepped(p, cur, delta));
+		{
+			const float nv = stepped(p, cur, delta);
+			put(I_FOCUS, nv);
+			// Into Manual: start the distance where the focus was just now -
+			// the player, or the middle of the picture - not somewhere unknown.
+			if (focusModeOf(nv) == FM_MANUAL)
+			{
+				const float m = focusModeOf(cur) == FM_PLAYER && playerFresh() ? s_playerMetres : centreFresh() ? centreMetres() : 0.0f;
+				if (m > 0.0f) put(I_DIST, clampf(floorf(m * 100.0f + 0.5f) / 100.0f, kDefs[I_DIST].lo, kDefs[I_DIST].hi));
+			}
 			break;
+		}
 		default:
 			put(p, stepped(p, cur, delta));
 			break;
 		}
+		if (misses && s_keyFullLogs++ < 3) logf("enb: %d keyframe(s) could not take the change - a clip holds ENB values on at most %d keyframes", misses, lights::kMaxEnbKeys);
 		if (ch) lights::markDirty();
 	}
 
@@ -1052,13 +1333,17 @@ namespace enbdof
 		if (!markerTimeNow(&t)) return;
 		lights::Lock lk;
 		if (!lights::g_cur) return;
-		auto clr = [&](int q) { lights::clearEnbParam(lights::g_cur->enb, t, q); };
+		float targets[256];
+		const int nt = targetsFor(t, targets, 256);
+		auto clr = [&](int q) { for (int k = 0; k < nt; ++k) lights::clearEnbParam(lights::g_cur->enb, targets[k], q); };
 		if (p == I_DIST && centreFresh())
 		{
 			// Enter on Focus Distance: focus on what is in the middle of the picture
 			Want w;
 			computeAt(t, w);
-			if (lights::setEnbParam(lights::g_cur->enb, t, I_DIST, floorf(centreMetres() * 100.0f + 0.5f) / 100.0f, w.v)) lights::markDirty();
+			const float m = clampf(floorf(centreMetres() * 100.0f + 0.5f) / 100.0f, kDefs[I_DIST].lo, kDefs[I_DIST].hi);
+			for (int k = 0; k < nt; ++k) lights::setEnbParam(lights::g_cur->enb, targets[k], I_DIST, m, w.v);
+			lights::markDirty();
 			return;
 		}
 		switch (p)
@@ -1157,7 +1442,15 @@ namespace enbdof
 		const Def& d = kDefs[p];
 		if (p == I_FOCUS)
 		{
-			if (v > 0.5f) return "Manual";
+			const int fm = focusModeOf(v);
+			if (fm == FM_MANUAL) return "Manual";
+			if (fm == FM_PLAYER)
+			{
+				if (!playerFresh()) return "Player";
+				const float m = s_playerMetres;
+				snprintf(buf, cap, m < 10.0f ? "Player (%.1f m)" : "Player (%.0f m)", m);
+				return buf;
+			}
 			if (!centreFresh()) return "Auto";
 			const float m = centreMetres();
 			snprintf(buf, cap, m < 10.0f ? "Auto (%.1f m)" : "Auto (%.0f m)", m);
@@ -1175,11 +1468,12 @@ namespace enbdof
 	{
 		switch (p)
 		{
-		case I_FOCUS:           return "Auto: the focus follows what is in the middle of the picture, as the clip plays. Manual: at Focus Distance.";
+		case I_FOCUS:           return "Auto: what is in the middle of the picture. Manual: Focus Distance. Player: the player, wherever they are.";
 		case V_APERTURE:        return "How much blur: 0% none at all, 100% the most. Hold left/right to go faster.";
 		case V_NEAR:            return "How much blur in front of the focus, next to the blur behind it: 100% the same.";
 		case V_ANAMORPHIC:      return "Oval bokeh, like an anamorphic lens: Off, or how stretched.";
-		case I_DIST:            return centreFresh() ? "Where the picture is sharp, in metres. Enter: focus on what is in the middle of the picture." : "Where the picture is sharp, in metres from the camera.";
+		case I_DIST:            return centreFresh() ? "Where it is sharp, in metres. Enter: on what is in the middle. Nearer things blur only with Near Field Blur on."
+												 : "Where it is sharp, in metres. Nearer things blur only with Near Field Blur on.";
 		case I_APERTURE:        return "How fast the blur comes in past the focus. Small numbers: gentle.";
 		case I_AUTO_APERTURE:   return "How strong the blur is.";
 		case I_NEAR:            return "Blur what is closer than the focus too.";
@@ -1190,9 +1484,9 @@ namespace enbdof
 		case 9:  return "Where the auto-focus looks, left to right.";
 		case 10: return "Where the auto-focus looks, top to bottom.";
 		case 11: return "Colour fringes at the edges of the blur. They grow with the blur, so they show more at a higher Aperture.";
-		case 12: return "A soft blur over the bokeh. Auto follows Aperture; left/right gives this keyframe its own, Enter goes back to Auto.";
+		case 12: return "How soft the blur is, at 100% Aperture - the Aperture scales it.";
 		case 13: return "More steps, smoother blur, slower.";
-		case 14: return "The largest the blur can get. Auto follows Aperture; left/right gives this keyframe its own, Enter goes back to Auto.";
+		case 14: return "How far the blur reaches, at 100% Aperture - the Aperture scales it.";
 		case 15: return "Bokeh quality.";
 		case 16: return "Lower renders the blur at less resolution - faster.";
 		case 17: return "Oval bokeh, like an anamorphic lens.";
@@ -1233,5 +1527,14 @@ namespace enbdof
 		g_cfg.enbDof = on;
 		iniWriteInt("EnbDof", on ? 1 : 0);
 		logf("enb: the ENB option is %s", on ? "on - the Rockstar Editor's depth of field is drawn by ENB" : "off - ENB's own values are back");
+	}
+
+	// Per Keyframe or All Keyframes: where a change on an ENB row goes.
+	void setAll(bool all)
+	{
+		if (g_cfg.enbAll == all) return;
+		g_cfg.enbAll = all;
+		iniWriteInt("EnbDofAllKeyframes", all ? 1 : 0);
+		logf("enb: ENB row changes now go to %s", all ? "every keyframe of the clip" : "the keyframe they are made on");
 	}
 }

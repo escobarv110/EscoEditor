@@ -695,16 +695,19 @@ int main(int argc, char** argv)
             for (int i = 0; i < ed::N; ++i) ed::s_known[i] = !ed::isLabel(i);
             ed::s_manual[ed::I_FOCUS] = 1.0f; ed::s_manual[ed::I_NEAR] = 1.0f; ed::s_manual[17] = 1.0f;
             ed::buildList();
-            const int wantManual[] = { ed::I_FOCUS, ed::I_DIST, ed::V_APERTURE, 12, 14, ed::I_NEAR, ed::V_NEAR, 11, ed::V_ANAMORPHIC };
+            const int wantManual[] = { ed::I_FOCUS, ed::I_DIST, ed::V_APERTURE, 14, 12, ed::I_NEAR, ed::V_NEAR, 11, ed::V_ANAMORPHIC };
             bool listOk = ed::listCount() == 9;
             for (int k = 0; listOk && k < 9; ++k) if (ed::listParam(k) != wantManual[k]) listOk = false;
-            CHECK(listOk && ed::listParam(9) == -1, "Manual: Focus Mode, Focus Distance, Aperture, Blur Size, Maximum Size, Near Field Blur On + its amount, Chromatic Spread, Anamorphic");
+            CHECK(listOk && ed::listParam(9) == -1, "Manual: Focus Mode, Focus Distance, Aperture, Maximum Size, Blur Size, Near Field Blur On + its amount, Chromatic Spread, Anamorphic");
             ed::s_manual[ed::I_FOCUS] = 0.0f; ed::s_manual[ed::I_NEAR] = 0.0f; ed::s_manual[17] = 0.0f;
             ed::buildList();
-            const int wantAuto[] = { ed::I_FOCUS, ed::V_APERTURE, 12, 14, ed::I_NEAR, 11, ed::V_ANAMORPHIC };
+            const int wantAuto[] = { ed::I_FOCUS, ed::V_APERTURE, 14, 12, ed::I_NEAR, 11, ed::V_ANAMORPHIC };
             bool autoOk = ed::listCount() == 7;
             for (int k = 0; autoOk && k < 7; ++k) if (ed::listParam(k) != wantAuto[k]) autoOk = false;
             CHECK(autoOk, "Auto: the same rows without a distance; Near Field Blur Off hides its amount");
+            ed::s_manual[ed::I_FOCUS] = 2.0f;
+            ed::buildList();
+            CHECK(ed::listCount() == 7 && ed::listParam(1) == ed::V_APERTURE, "Player: no distance row either - the player is the distance");
 
             // one Aperture percentage, converted for whichever technique runs
             CHECK(ed::manualFromPct(0.0f) == 0.0f && fabsf(ed::manualFromPct(100.0f) - 0.12f) < 1e-6f && fabsf(ed::manualFromPct(50.0f) - 0.06f) < 1e-6f &&
@@ -712,21 +715,24 @@ int main(int argc, char** argv)
                   "Aperture: 0%% is no blur (aperture 0), 50%% is 0.06, 100%% is 0.12, anything bigger reads as 100%%");
             {
                 float mx = 0.0f, bs = 0.0f;
-                ed::blurSizesFor(0.0f, &mx, &bs);
+                ed::blurSizesFor(0.0f, 20.0f, 2.0f, &mx, &bs);
                 const bool none = mx == 2.0f && bs == 0.0f;
-                ed::blurSizesFor(0.12f, &mx, &bs);
+                ed::blurSizesFor(0.12f, 20.0f, 2.0f, &mx, &bs);
                 const bool full = mx == 20.0f && bs == 2.0f;
-                ed::blurSizesFor(0.06f, &mx, &bs);
-                CHECK(none && full && fabsf(mx - 11.0f) < 1e-4f && fabsf(bs - 1.0f) < 1e-4f,
-                      "the blur's size follows the Aperture too: Maximum size 2..20 and Blur size 0..2 from 0%% to 100%%");
+                ed::blurSizesFor(0.06f, 20.0f, 2.0f, &mx, &bs);
+                const bool half = fabsf(mx - 11.0f) < 1e-4f && fabsf(bs - 1.0f) < 1e-4f;
+                ed::blurSizesFor(0.06f, 10.0f, 1.0f, &mx, &bs);
+                CHECK(none && full && half && fabsf(mx - 6.0f) < 1e-4f && fabsf(bs - 0.5f) < 1e-4f,
+                      "the Aperture scales the keyframe's own sizes: 0%% none, 100%% exactly the Maximum Size and Blur Size rows, 50%% half way (4.18)");
             }
             CHECK(fabsf(ed::autoFromPct(50.0f) - 5.0f) < 1e-6f && fabsf(ed::pctAuto(0.5f) - 5.0f) < 1e-4f,
                   "Auto: 50%% is 5 on its own scale, and NVE's 0.5 there is only 5%% - the Auto that blurred nothing");
             ed::s_manual[ed::I_AUTO_APERTURE] = 5.0f;
             ed::s_manual[ed::I_APERTURE] = 0.06f;
             bool own;
-            CHECK(fabsf(ed::valueHere(14, &own) - 11.0f) < 1e-4f && fabsf(ed::valueHere(12, &own) - 1.0f) < 1e-4f && !own,
-                  "Blur Size and Maximum Size show what the Aperture gives them (Auto) until a keyframe sets its own");
+            ed::s_manual[14] = 16.0f; ed::s_manual[12] = 1.5f;
+            CHECK(ed::valueHere(14, &own) == 16.0f && ed::valueHere(12, &own) == 1.5f && !own,
+                  "Maximum Size and Blur Size show their own numbers - no Auto any more");
             CHECK(fabsf(ed::valueHere(ed::V_APERTURE, &own) - 50.0f) < 1e-3f,
                   "the Aperture row reads the Manual technique's aperture - NVE runs Manual, Auto included (4.14)");
 
@@ -764,8 +770,20 @@ int main(int argc, char** argv)
                   "Anamorphic on reads its stretch; the combined rows do not add or remove rows");
             char fb[16];
             CHECK(!strcmp(ed::format(ed::I_FOCUS, 0.0f, fb, 16), "Auto") && !strcmp(ed::format(ed::I_FOCUS, 1.0f, fb, 16), "Manual") &&
-                  ed::stepped(ed::I_FOCUS, 1.0f, 1) == 0.0f && ed::stepped(ed::I_FOCUS, 0.0f, -8) == 1.0f && ed::reshapes(ed::I_FOCUS),
-                  "Focus Mode reads Auto / Manual, flips either way, and changing it redraws the rows");
+                  !strcmp(ed::format(ed::I_FOCUS, 2.0f, fb, 16), "Player") &&
+                  ed::stepped(ed::I_FOCUS, 0.0f, 1) == 1.0f && ed::stepped(ed::I_FOCUS, 1.0f, 1) == 2.0f && ed::stepped(ed::I_FOCUS, 2.0f, 1) == 0.0f &&
+                  ed::stepped(ed::I_FOCUS, 0.0f, -8) == 2.0f && ed::reshapes(ed::I_FOCUS),
+                  "Focus Mode cycles Auto, Manual, Player - one a press however long it is held - and redraws the rows");
+            // Focus Distance: steps that suit it, in 0.3 .. 200 m
+            {
+                const bool down = ed::stepped(ed::I_DIST, 38.9f, -1) == 35.0f && ed::stepped(ed::I_DIST, 10.0f, -1) == 9.75f;
+                const bool up = ed::stepped(ed::I_DIST, 4.1f, 1) == 4.25f && ed::stepped(ed::I_DIST, 0.95f, 1) == 1.0f && ed::stepped(ed::I_DIST, 9.75f, 1) == 10.0f;
+                const bool ends = ed::stepped(ed::I_DIST, 396.0f, -1) == 190.0f && ed::stepped(ed::I_DIST, 0.3f, -1) == 0.3f && ed::stepped(ed::I_DIST, 195.0f, 3) == 200.0f;
+                float x = 4.0f;
+                for (int k = 0; k < 8; ++k) x = ed::stepped(ed::I_DIST, x, 1);
+                CHECK(down && up && ends && x == 6.0f,
+                      "Focus Distance moves by 5 cm to 10 m as suits the distance, stays in 0.3..200 m (4.17's 396 m comes back to 190 m), 8 presses from 4 m is 6 m (%.2f)", x);
+            }
             ed::kinds[ed::I_FOCUS] = (uint8_t)ed::kDefs[ed::I_FOCUS].kind;
             {
                 lights::EnbTrack ft = {};
@@ -962,6 +980,45 @@ int main(int argc, char** argv)
             lt::clearStore();
         }
         fakestore::remove();
+    }
+
+    // ---- Focus Mode Player: finding the player (4.18) ------------------------------
+    {
+        namespace ed = enbdof;
+        // six stand-in peds; each has an "intelligence" that points back to it (every
+        // ped has one), ped 3 also a "player record" pointing back
+        static uint8_t peds[6][0x1400];
+        static uint8_t intel[6][0x400];
+        static uint8_t record[0x400];
+        memset(peds, 0, sizeof(peds)); memset(intel, 0, sizeof(intel)); memset(record, 0, sizeof(record));
+        void* list[6];
+        for (int i = 0; i < 6; ++i)
+        {
+            list[i] = peds[i];
+            *(uintptr_t*)(peds[i] + 0x1010) = (uintptr_t)intel[i];
+            *(uintptr_t*)(intel[i] + 0x120) = (uintptr_t)peds[i];
+            *(uintptr_t*)(peds[i] + 0x1100) = (uintptr_t)peds[i] + 0x40;          // a pointer inside the ped: ignored
+        }
+        *(uintptr_t*)(peds[3] + 0x10A8) = (uintptr_t)record;
+        *(uintptr_t*)(record + 0x1E8) = (uintptr_t)peds[3];
+        int A = -1, B = -1;
+        void* who = nullptr;
+        CHECK(ed::learnLink(list, 6, &A, &B, &who) && A == 0x10A8 && B == 0x1E8 && who == peds[3],
+              "of six peds, the one with a player record is found, and the link every ped has is not taken for it (+0x%X, +0x%X)", A, B);
+        CHECK(!ed::learnLink(list, 3, &A, &B, &who), "with fewer than four peds it does not guess");
+        *(uintptr_t*)(peds[3] + 0x10A8) = 0;
+        CHECK(!ed::learnLink(list, 6, &A, &B, &who), "no ped with player data: no answer (the character nearest the middle is used)");
+
+        const float cam[3] = { 0.0f, 0.0f, 0.0f }, fwd[3] = { 0.0f, 1.0f, 0.0f };
+        const float pos[4][3] = { { 5.0f, 5.0f, 0.0f },      // 45 degrees off: not in the middle
+                                  { 0.5f, 10.0f, 0.0f },     // nearly dead ahead, 10 m
+                                  { 0.0f, -4.0f, 0.0f },     // behind the camera
+                                  { 1.5f, 6.0f, 0.2f } };    // ahead, a little off
+        float z = 0.0f;
+        const int k = ed::nearestToCentre(cam, fwd, pos, 4, &z);
+        CHECK(k == 1 && fabsf(z - 10.0f) < 1e-4f, "without player data: the character nearest the middle of the picture, and how far along the view (%d, %.1f m)", k, z);
+        const float none[1][3] = { { 0.0f, -3.0f, 0.0f } };
+        CHECK(ed::nearestToCentre(cam, fwd, none, 1, &z) == -1, "and nobody when everyone is behind the camera");
     }
 
     // ---- a light that flashes ------------------------------------------------------

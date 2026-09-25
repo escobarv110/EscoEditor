@@ -259,7 +259,7 @@ namespace menu
 		case R_WEATHER: return scene::weatherName();
 		case R_LKEY:    return lights::g_capture ? "Press a key" : keyName(g_cfg.keyLights, buf, cap);
 		case R_LALL:    return g_cfg.lightsAll ? "On" : "Off";
-		case R_ENB:     return !enbdof::s_found ? "No ENB" : g_cfg.enbDof ? "On" : "Off";
+		case R_ENB:     return !enbdof::s_found ? "No ENB" : !g_cfg.enbDof ? "Off" : g_cfg.enbAll ? "All Keyframes" : "Per Keyframe";
 		default:
 			if (isEnbOpt(r))
 			{
@@ -293,7 +293,7 @@ namespace menu
 		case R_WEATHER: return scene::kWeatherCount + 1;
 		case R_LKEY:    return lights::kCycleCount;
 		case R_LALL:    return 2;
-		case R_ENB:     return 2;
+		case R_ENB:     return 3;
 		default:        return isEnbOpt(r) ? 100 : -1;
 		}
 	}
@@ -333,7 +333,14 @@ namespace menu
 		case R_ENB:
 			if (!enbdof::s_found) return "No ENB in the game. With ENB (NVE's is fine) this row hands it the depth of field of every keyframe.";
 			if (!enbdof::s_ready) return "ENB found - waiting for its depth of field shader to load (EnableDepthOfField on in ENB).";
-			return "On: ENB draws the depth of field with the rows below, set per keyframe - whatever the game's Focus row says. Set that to None so the game's own blur does not add to ENB's.";
+			if (!g_cfg.enbDof) return "Left/right: Per Keyframe - the rows below change this keyframe; All Keyframes - every change goes to every keyframe of the clip.";
+			if (g_rePlus)
+				return g_cfg.enbAll
+					? "All Keyframes: every change below goes to every keyframe. Rockstar Editor+ renders keep ENB's blur; leave RE+'s own lens depth of field off, or both blur."
+					: "Per Keyframe: the rows below change this keyframe. Rockstar Editor+ renders keep ENB's blur; leave RE+'s own lens depth of field off, or both blur.";
+			return g_cfg.enbAll
+				? "All Keyframes: every change below goes to every keyframe of the clip. Left/right: Off, Per Keyframe. Set the game's Focus to None so its own blur does not add to ENB's."
+				: "Per Keyframe: the rows below change this keyframe, blending to the next. Left/right: All Keyframes, Off. Set the game's Focus to None so its own blur does not add to ENB's.";
 		case R_LOPEN:
 			if (!lightui::g_imgui) return "Needs ReShade with add-on support: the light editor is a ReShade window.";
 			snprintf(buf, sizeof(buf), "Place lights with a 3D gizmo. %s opens and closes it too.", keyName(g_cfg.keyLights, s, sizeof(s)));
@@ -353,7 +360,8 @@ namespace menu
 				const bool below = r == s_rows[s_shown - 1] && enbdof::g_scroll + enbShown() < n;
 				const bool above = r == R_ENBO0 && enbdof::g_scroll > 0;
 				snprintf(buf, sizeof(buf), "%s %s (%d of %d%s)", enbdof::hint(p),
-					own ? "This keyframe's own; Enter gives it back to the keyframes around it." : "Left/right gives this keyframe its own. Hold to go faster.",
+					g_cfg.enbAll ? "Left/right changes it on every keyframe; Enter puts the default back on all of them."
+					: own ? "This keyframe's own; Enter puts the default back." : "Left/right gives this keyframe its own. Hold to go faster.",
 					k, n, below ? " - down for more" : above ? " - up for more" : "");
 				return buf;
 			}
@@ -411,7 +419,15 @@ namespace menu
 		case R_WEATHER: scene::stepWeather(delta); break;
 		case R_LKEY:    lights::stepShortcut(delta); break;
 		case R_LALL:    lights::toggleAllClips(); break;
-		case R_ENB:     enbdof::setOn(!g_cfg.enbDof); return true;     // the option rows come and go
+		case R_ENB:
+		{
+			// Off -> Per Keyframe -> All Keyframes, and back the other way
+			int st = !g_cfg.enbDof ? 0 : g_cfg.enbAll ? 2 : 1;
+			st = (st + (delta > 0 ? 1 : 2)) % 3;
+			if ((st != 0) != g_cfg.enbDof) enbdof::setOn(st != 0);
+			if (st != 0) enbdof::setAll(st == 2);
+			return true;                                   // the option rows come and go
+		}
 		default:
 			if (isEnbOpt(r))
 			{

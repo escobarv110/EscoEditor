@@ -1,4 +1,4 @@
-EscoEditor.asi 4.17  -  more control for the Rockstar Editor
+EscoEditor.asi 4.18  -  more control for the Rockstar Editor
 ======================================================================
 (formerly EditorCamSpeed.asi - same plugin, new name)
 
@@ -9,6 +9,38 @@ menu, adds scene lights you place in the picture with a 3D gizmo - fixed in
 the world, on the camera, or riding along with a ped, a vehicle or a prop -
 and keeps the free camera speed keys. The editor's own camera path,
 transitions, shake and depth of field are never touched.
+
+WHAT CHANGED IN 4.18
+  - Focus Distance works as a distance. It moved by 10% of itself a press,
+    and a held key sent it to hundreds of metres in a second (the log showed
+    about 400 m) - behind everything in the picture, where nothing changes,
+    because what is in front of the focus only blurs with Near Field Blur on.
+    Now it stays in 0.3 - 200 m and steps by what suits the distance: 5 cm
+    under a metre, 25 cm to 10 m, 1 m to 30 m, then 5 and 10 m. A focus left
+    beyond 200 m by an older version comes back to 200 m.
+  - Switching a keyframe to Manual starts its Focus Distance where the focus
+    just was (the player, or the middle of the picture). Enter on Focus
+    Distance still focuses on the middle of the picture.
+  - Aperture always changes the blur now, with Maximum Size and Blur Size
+    there too: those two say what the blur is at 100%, and the Aperture
+    scales all of it - 0% no blur, 50% half, 100% exactly those sizes. (In
+    4.17 a keyframe with sizes of its own no longer followed the Aperture, and
+    NVE's own aperture is spent by about 0.1, so Aperture did next to
+    nothing.)
+  - Focus Mode Player: the focus follows the player - their chest, along the
+    camera's view - wherever they walk in the shot. EscoEditor looks for the
+    ped that carries player data; if the replay has none, it follows the
+    character nearest the middle of the picture, and keeps to that one while
+    it stays in view. The log says which. Focus Mode cycles Auto, Manual,
+    Player.
+  - Per Keyframe or All Keyframes: the ENB row is Off, Per Keyframe or All
+    Keyframes. With All Keyframes every change on an ENB row goes to every
+    keyframe of the clip at once (Enter puts the default back on all of
+    them); with Per Keyframe it changes the keyframe you are on.
+  - Rockstar Editor+: Auto and Player focus now ease on the clip's own clock,
+    so an export - RE+'s frame-by-frame render included, at whatever speed it
+    runs - pulls focus exactly as the playback did. The ENB row's help line
+    notes that RE+'s own lens depth of field would blur on top of ENB's.
 
 WHAT CHANGED IN 4.17
   - EscoFlare.fx is built into the plugin and written into ReShade's shader
@@ -534,7 +566,7 @@ WHAT CHANGED IN 2.9
 
 CHECK YOU HAVE THIS VERSION
   The first line of EscoEditor.log (next to the .asi) must say
-  "EscoEditor 4.17".
+  "EscoEditor 4.18".
 
 INSTALL
   FiveM:          close FiveM, run Install.bat - or copy EscoEditor.asi
