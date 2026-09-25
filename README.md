@@ -9,7 +9,7 @@ place in the picture with a 3D gizmo and key over the clip**.
 No ScriptHookV, no Rockstar Editor+, no Menyoo. One `.asi`, and it runs
 alongside Rockstar Editor+ if you use that too.
 
-<sub>Version 4.6 · GTA V b3258–b3751 and singleplayer b3407 · MIT</sub>
+<sub>Version 4.7 · GTA V b3258–b3751 and singleplayer b3407 · MIT</sub>
 
 ---
 
@@ -43,9 +43,11 @@ alongside Rockstar Editor+ if you use that too.
   manual focus sets ENB's focus distance, the intensity (1–10) times a scale
   sets the aperture, None means no blur, Default leaves ENB alone — blended
   from one keyframe to the next.
-* **Every ENB DOF option** — near field, blur size and quality, anamorphic,
-  lens distortion and the rest — can be set for the session or **keyed over the
-  clip**.
+* **Every ENB DOF option, per keyframe**, right in the keyframe's own Depth of
+  Field menu: an *ENB Options* row picks a page (Focus, Blur, Near field,
+  Anamorphic, Quality, Auto-focus, Lens) and its rows are that keyframe's
+  values. Each option blends between the keyframes that set it; a keyframe that
+  sets only its blur size leaves the focus to the game's own rows.
 * Values go in from ENB's own per-frame callback, only when they change, and
   ENB's own values go back when the switch is off and before ENB saves, so its
   `.ini` keeps yours.
@@ -141,7 +143,7 @@ build\selftest\selftest.bat   :: builds the self-test
 build\selftest\selftest.exe            :: a cameras.ymt may be passed, but is not needed
 ```
 
-The self-test is 155 checks over the parts that can run outside the game: the
+The self-test is 163 checks over the parts that can run outside the game: the
 metadata parser, the light record, keyframe interpolation, the light file
 format, the entity pools, the marker clipboard, Free Look's snapshots, MinHook
 itself. It prints `SELFTEST: all checks passed` or the first thing that broke.

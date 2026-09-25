@@ -975,7 +975,9 @@ namespace lightui
 			ImGui::PushID(3000 + i);
 			ImGui::AlignTextToFramePadding();
 			char what[128];
-			snprintf(what, sizeof(what), "%6.2f s    focus %.2f m    aperture %.2f", k.t / 1000.0f,
+			int nset = 0;
+			for (int b = 0; b < enbdof::N; ++b) if (k.set & (1u << b)) ++nset;
+			snprintf(what, sizeof(what), "%6.2f s    %d option(s)    focus %.2f m    aperture %.2f", k.t / 1000.0f, nset,
 				k.v[enbdof::I_DIST], k.v[enbdof::I_APERTURE]);
 			if (fabsf(k.t - kt) <= 5.0f) ImGui::TextColored(kHotText, "%s   <- here", what);
 			else                         ImGui::TextUnformatted(what);

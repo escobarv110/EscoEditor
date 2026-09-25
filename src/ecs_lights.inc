@@ -151,43 +151,98 @@ namespace lights
 	// option (ecs_enbdof.inc). Floats interpolate, whole numbers round, the
 	// switches change at the key.
 	constexpr int kEnbParams = 23, kMaxEnbKeys = 16;
-	struct EnbKey { float t; float v[kEnbParams]; };
+	struct EnbKey { float t; uint32_t set; float v[kEnbParams]; };   // `set`: bit i = this key sets option i
 	struct EnbTrack { int n; EnbKey k[kMaxEnbKeys]; };
 
 	struct LightSet { int count; uint32_t nextId; Light l[kMaxLights]; SceneTrack sky; EnbTrack enb; };
 
-	// `kinds`: 0 a float, 1 a whole number, 2 a switch.
-	bool evalEnb(const EnbTrack& s, float t, float* out, const uint8_t* kinds)
+	constexpr uint32_t kEnbAll = (1u << kEnbParams) - 1u;
+
+	// `kinds`: 0 a float, 1 a whole number, 2 a switch. Each option is blended
+	// on its own, between the keys that SET it: a keyframe that only sets the
+	// blur size says nothing about the focus. Returns which options the keys
+	// decided; the rest are left as they were in `out`.
+	uint32_t evalEnb(const EnbTrack& s, float t, float* out, const uint8_t* kinds)
 	{
-		if (s.n <= 0) return false;
-		int i = 0;
-		while (i < s.n - 1 && s.k[i + 1].t <= t) ++i;
-		const EnbKey& a = s.k[i];
-		const bool last = (i >= s.n - 1) || t <= a.t;
-		const EnbKey& b = last ? a : s.k[i + 1];
-		float u = 0.0f;
-		if (!last && b.t > a.t) u = (t - a.t) / (b.t - a.t);
-		if (u < 0.0f) u = 0.0f;
-		if (u > 1.0f) u = 1.0f;
+		uint32_t filled = 0;
 		for (int p = 0; p < kEnbParams; ++p)
 		{
-			const float x = a.v[p] + (b.v[p] - a.v[p]) * u;
-			out[p] = kinds[p] == 2 ? a.v[p] : kinds[p] == 1 ? floorf(x + 0.5f) : x;
+			const uint32_t bit = 1u << p;
+			const EnbKey* a = nullptr;
+			const EnbKey* b = nullptr;
+			for (int i = 0; i < s.n; ++i)
+			{
+				const EnbKey& k = s.k[i];
+				if (!(k.set & bit)) continue;
+				if (k.t <= t) a = &k;
+				else { b = &k; break; }
+			}
+			if (!a && !b) continue;
+			filled |= bit;
+			if (!a) { out[p] = b->v[p]; continue; }                  // before the first: it holds
+			if (!b || kinds[p] == 2) { out[p] = a->v[p]; continue; } // after the last, or a switch
+			float u = b->t > a->t ? (t - a->t) / (b->t - a->t) : 0.0f;
+			if (u < 0.0f) u = 0.0f;
+			if (u > 1.0f) u = 1.0f;
+			const float x = a->v[p] + (b->v[p] - a->v[p]) * u;
+			out[p] = kinds[p] == 1 ? floorf(x + 0.5f) : x;
 		}
-		return true;
+		return filled;
 	}
 
+	// A key of every option at `t` (the light editor's Key ENB here).
 	int addEnbKey(EnbTrack& s, float t, const float* v)
 	{
 		for (int i = 0; i < s.n; ++i)
-			if (fabsf(s.k[i].t - t) <= 5.0f) { memcpy(s.k[i].v, v, sizeof(s.k[i].v)); return i; }
+			if (fabsf(s.k[i].t - t) <= 5.0f) { memcpy(s.k[i].v, v, sizeof(s.k[i].v)); s.k[i].set = kEnbAll; return i; }
 		if (s.n >= kMaxEnbKeys) return -1;
 		int at = s.n;
 		while (at > 0 && s.k[at - 1].t > t) { s.k[at] = s.k[at - 1]; --at; }
 		s.k[at].t = t;
+		s.k[at].set = kEnbAll;
 		memcpy(s.k[at].v, v, sizeof(s.k[at].v));
 		++s.n;
 		return at;
+	}
+
+	// One option of the keyframe at `t` (the Depth of Field menu's rows). A new
+	// key starts from `seed` - what the keyframe showed - with only this one
+	// option set, so the rest keep following the keyframes around it.
+	bool setEnbParam(EnbTrack& s, float t, int p, float value, const float* seed)
+	{
+		if (p < 0 || p >= kEnbParams) return false;
+		for (int i = 0; i < s.n; ++i)
+			if (fabsf(s.k[i].t - t) <= 5.0f) { s.k[i].v[p] = value; s.k[i].set |= 1u << p; return true; }
+		if (s.n >= kMaxEnbKeys) return false;
+		int at = s.n;
+		while (at > 0 && s.k[at - 1].t > t) { s.k[at] = s.k[at - 1]; --at; }
+		s.k[at].t = t;
+		s.k[at].set = 1u << p;
+		memcpy(s.k[at].v, seed, sizeof(s.k[at].v));
+		s.k[at].v[p] = value;
+		++s.n;
+		return true;
+	}
+
+	// Does the keyframe at `t` set option p itself - and to what.
+	bool enbKeyValue(const EnbTrack& s, float t, int p, float* out)
+	{
+		for (int i = 0; i < s.n; ++i)
+			if (fabsf(s.k[i].t - t) <= 5.0f && (s.k[i].set & (1u << p))) { *out = s.k[i].v[p]; return true; }
+		return false;
+	}
+
+	// Hand option p of the keyframe at `t` back to the keyframes around it. A
+	// key that is left setting nothing goes.
+	void clearEnbParam(EnbTrack& s, float t, int p)
+	{
+		for (int i = 0; i < s.n; ++i)
+			if (fabsf(s.k[i].t - t) <= 5.0f)
+			{
+				s.k[i].set &= ~(1u << p);
+				if (!s.k[i].set) { for (int j = i; j < s.n - 1; ++j) s.k[j] = s.k[j + 1]; --s.n; }
+				return;
+			}
 	}
 
 	void removeEnbKey(EnbTrack& s, int i)
@@ -1806,7 +1861,7 @@ namespace lights
 				const EnbKey& q = e.set->enb.k[k];
 				std::string line = "e";
 				char num[32];
-				snprintf(num, sizeof(num), " %.9g", q.t);
+				snprintf(num, sizeof(num), " %.9g %u", q.t, (unsigned)q.set);
 				line += num;
 				for (int p = 0; p < kEnbParams; ++p) { snprintf(num, sizeof(num), " %.9g", q.v[p]); line += num; }
 				o += line;
@@ -1884,8 +1939,15 @@ namespace lights
 			}
 			if (!strncmp(s, "e ", 2))
 			{
-				float g[1 + kEnbParams] = {};
-				if (set && parseSome(s + 2, g, 1 + kEnbParams) == 1 + kEnbParams) addEnbKey(set->enb, g[0], g + 1);
+				float g[2 + kEnbParams] = {};
+				const int got = set ? parseSome(s + 2, g, 2 + kEnbParams) : 0;
+				if (got == 2 + kEnbParams)                       // 4.7: time, which options, values
+				{
+					const int at = addEnbKey(set->enb, g[0], g + 2);
+					if (at >= 0) set->enb.k[at].set = (uint32_t)g[1] & kEnbAll;
+				}
+				else if (got == 1 + kEnbParams)                  // 4.6: time and every option
+					addEnbKey(set->enb, g[0], g + 1);
 				continue;
 			}
 			if (!strncmp(s, "t ", 2))

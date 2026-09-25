@@ -89,7 +89,7 @@ namespace menu
 	enum Page { PAGE_CLOSED = 0, PAGE_CAMSPEED, PAGE_CLIPBOARD, PAGE_SCENE, PAGE_LIGHTS, PAGE_COUNT };
 	enum Row  { R_HEADER = 0, R_SPEED, R_VSPEED, R_LOOK, R_FREE,
 	            R_FROM, R_TO, R_COPY, R_CUT, R_PASTE, R_SPDALL, R_TIME, R_WEATHER,
-	            R_DCOPY, R_DPASTE, R_DALL, R_ENB, R_LOPEN, R_LKEY, R_LALL, R_COUNT };
+	            R_DCOPY, R_DPASTE, R_DALL, R_ENB, R_ENBPAGE, R_ENBP0, R_ENBP1, R_ENBP2, R_ENBP3, R_ENBP4, R_LOPEN, R_LKEY, R_LALL, R_COUNT };
 
 	int g_kind = K_MARKER;   // the column our rows are in right now
 	int g_page = PAGE_CAMSPEED;
@@ -127,6 +127,12 @@ namespace menu
 		{
 			s_rows[s_shown++] = R_DCOPY; s_rows[s_shown++] = R_DPASTE; s_rows[s_shown++] = R_DALL;
 			s_rows[s_shown++] = R_ENB;
+			// this keyframe's ENB options, a page at a time, while the switch is on
+			if (g_cfg.enbDof && enbdof::s_ready)
+			{
+				s_rows[s_shown++] = R_ENBPAGE;
+				for (int i = 0; i < enbdof::pageRows() && i < 5; ++i) s_rows[s_shown++] = R_ENBP0 + i;
+			}
 			return;
 		}
 		s_rows[s_shown++] = R_HEADER;
@@ -215,6 +221,12 @@ namespace menu
 		case R_DPASTE:  return "Paste DOF";
 		case R_DALL:    return "DOF To All";
 		case R_ENB:     return "ENB";
+		case R_ENBPAGE: return "ENB Options";
+		case R_ENBP0: case R_ENBP1: case R_ENBP2: case R_ENBP3: case R_ENBP4:
+		{
+			const int p = enbdof::pageParam(r - R_ENBP0);
+			return p >= 0 ? enbdof::kDefs[p].label : "";
+		}
 		case R_LOPEN:   return "Open Light Editor";
 		case R_LKEY:    return "Light Editor Key";
 		case R_LALL:    return "Lights In Every Clip";
@@ -239,7 +251,15 @@ namespace menu
 		case R_WEATHER: return scene::weatherName();
 		case R_LKEY:    return lights::g_capture ? "Press a key" : keyName(g_cfg.keyLights, buf, cap);
 		case R_LALL:    return g_cfg.lightsAll ? "On" : "Off";
-		case R_ENB:     return g_cfg.enbDof ? "On" : "Off";
+		case R_ENB:     return !enbdof::s_found ? "No ENB" : g_cfg.enbDof ? "On" : "Off";
+		case R_ENBPAGE: return enbdof::pageName();
+		case R_ENBP0: case R_ENBP1: case R_ENBP2: case R_ENBP3: case R_ENBP4:
+		{
+			const int p = enbdof::pageParam(r - R_ENBP0);
+			if (p < 0) return "";
+			bool own;
+			return enbdof::format(p, enbdof::valueHere(p, &own), buf, cap);
+		}
 		default:        return "";
 		}
 	}
@@ -258,6 +278,8 @@ namespace menu
 		case R_LKEY:    return lights::kCycleCount;
 		case R_LALL:    return 2;
 		case R_ENB:     return 2;
+		case R_ENBPAGE: return enbdof::kPageCount;
+		case R_ENBP0: case R_ENBP1: case R_ENBP2: case R_ENBP3: case R_ENBP4: return 100;
 		default:        return -1;
 		}
 	}
@@ -295,9 +317,19 @@ namespace menu
 		case R_DPASTE:  snprintf(buf, sizeof(buf), "Paste the copied DOF here. %s", dof::g_last); return buf;
 		case R_DALL:    snprintf(buf, sizeof(buf), "Put this DOF on every keyframe. %s", dof::g_last); return buf;
 		case R_ENB:
-			if (!enbdof::s_found) return "Needs ENBSeries with its SDK (an ENB d3d11.dll) - none in the game.";
-			if (!enbdof::s_ready) return "ENB found - waiting for its depth of field shader to load.";
-			return "ENB draws this depth of field: focus and strength follow each keyframe. Turn EnableDepthOfField on in ENB.";
+			if (!enbdof::s_found) return "No ENB in the game. With ENB (NVE's is fine) this row hands it the depth of field of every keyframe.";
+			if (!enbdof::s_ready) return "ENB found - waiting for its depth of field shader to load (EnableDepthOfField on in ENB).";
+			return "On: ENB draws this depth of field - each keyframe's Focus and Intensity, and the ENB options below, per keyframe.";
+		case R_ENBPAGE: return "Left/right: which ENB options are shown - Focus, Blur, Near field, Anamorphic, Quality, Auto-focus, Lens.";
+		case R_ENBP0: case R_ENBP1: case R_ENBP2: case R_ENBP3: case R_ENBP4:
+		{
+			const int p = enbdof::pageParam(r - R_ENBP0);
+			if (p < 0) return "";
+			bool own;
+			enbdof::valueHere(p, &own);
+			return own ? "This keyframe's own. Left/right changes it; Enter hands it back to the keyframes around it."
+					   : "Blended from the keyframes around it. Left/right gives this keyframe its own.";
+		}
 		case R_LOPEN:
 			if (!lightui::g_imgui) return "Needs ReShade with add-on support: the light editor is a ReShade window.";
 			snprintf(buf, sizeof(buf), "Place lights with a 3D gizmo. %s opens and closes it too.", keyName(g_cfg.keyLights, s, sizeof(s)));
@@ -360,7 +392,11 @@ namespace menu
 		case R_WEATHER: scene::stepWeather(delta); break;
 		case R_LKEY:    lights::stepShortcut(delta); break;
 		case R_LALL:    lights::toggleAllClips(); break;
-		case R_ENB:     enbdof::setOn(!g_cfg.enbDof); break;
+		case R_ENB:     enbdof::setOn(!g_cfg.enbDof); return true;     // the option rows come and go
+		case R_ENBPAGE: enbdof::nextPage(delta); return true;
+		case R_ENBP0: case R_ENBP1: case R_ENBP2: case R_ENBP3: case R_ENBP4:
+			enbdof::stepHere(enbdof::pageParam(r - R_ENBP0), delta);
+			break;
 		default: break;
 		}
 		return false;
@@ -380,7 +416,10 @@ namespace menu
 		case R_DCOPY:  dof::copy();            return false;
 		case R_DPASTE: return dof::paste();          // the stock DOF rows show the new values after a rebuild
 		case R_DALL:   dof::applyToAll();      return false;
-		case R_ENB:    enbdof::setOn(!g_cfg.enbDof); return false;
+		case R_ENB:    enbdof::setOn(!g_cfg.enbDof); return true;
+		case R_ENBP0: case R_ENBP1: case R_ENBP2: case R_ENBP3: case R_ENBP4:
+			enbdof::clearHere(enbdof::pageParam(r - R_ENBP0));
+			return false;
 		case R_LOPEN:  if (lightui::g_imgui) InterlockedExchange(&lights::g_openReq, 1); return false;
 		case R_LKEY:   lights::beginCapture(lights::CAP_MENU); return false;
 		default: return false;

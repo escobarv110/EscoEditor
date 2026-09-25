@@ -634,6 +634,37 @@ int main(int argc, char** argv)
         lights::evalEnb(tr, 1000.0f, out, ed::kinds);
         CHECK(out[17] == 0.0f, "at the next key the switch changes");
 
+        // one option set on one keyframe: the others keep following the keyframes around it
+        {
+            lights::EnbTrack mt = {};
+            float seed[ed::N] = {};
+            seed[ed::I_DIST] = 7.0f; seed[12] = 1.0f;
+            CHECK(lights::setEnbParam(mt, 1000.0f, 12, 3.0f, seed) && mt.n == 1 && mt.k[0].set == (1u << 12),
+                  "a keyframe's own blur size is a key that sets only the blur size");
+            float o[ed::N] = {};
+            o[ed::I_DIST] = 99.0f;
+            const uint32_t filled = lights::evalEnb(mt, 1000.0f, o, ed::kinds);
+            CHECK(filled == (1u << 12) && o[12] == 3.0f && o[ed::I_DIST] == 99.0f,
+                  "evaluating it decides the blur size and leaves the focus to the game's DOF (%.1f, %.1f)", o[12], o[ed::I_DIST]);
+            float v2 = 0.0f;
+            CHECK(lights::enbKeyValue(mt, 1000.0f, 12, &v2) && v2 == 3.0f && !lights::enbKeyValue(mt, 1000.0f, ed::I_DIST, &v2),
+                  "the keyframe knows which options are its own");
+            float ap[ed::N] = {};
+            ed::EdDof ca = {};
+            ca.have = true; ca.mode = dof::MODE_CUSTOM; ca.focus = dof::FOCUS_MANUAL; ca.dist = 4.0f; ca.intensity = 6.0f;
+            ap[ed::I_APERTURE] = 2.2f;
+            ed::applyEditor(ca, ca, 0.0f, 0.25f, ap, nullptr, 0, 1u << ed::I_APERTURE);
+            CHECK(ap[ed::I_APERTURE] == 2.2f && ap[ed::I_DIST] == 4.0f,
+                  "an aperture the keyframe set itself wins over the game's intensity; the focus still follows the game");
+            ed::EdDof pct = ca;
+            pct.intensity = 0.5f;                         // shown as 50% in the game's menu
+            float pv[ed::N] = {};
+            ed::applyEditor(pct, pct, 0.0f, 0.25f, pv, nullptr, 0);
+            CHECK(fabsf(pv[ed::I_APERTURE] - 1.25f) < 1e-4f, "an intensity stored as 0..1 is read as its 1..10 step (%.2f)", pv[ed::I_APERTURE]);
+            lights::clearEnbParam(mt, 1000.0f, 12);
+            CHECK(mt.n == 0, "handing its only option back removes the keyframe's key");
+        }
+
         // and they survive the lights file
         {
             namespace lt = lights;
@@ -647,6 +678,21 @@ int main(int argc, char** argv)
             lt::LightSet* back = lt::findSet("ENBProj", 0, false);
             CHECK(back && back->enb.n == 2 && fabsf(back->enb.k[1].v[ed::I_DIST] - 15.0f) < 1e-4f && back->enb.k[0].v[17] == 1.0f,
                   "ENB keys are saved and read back with the clip");
+            back->enb.k[1].set = (1u << 12) | (1u << ed::I_DIST);
+            const std::string text2 = lt::serialize();
+            lt::clearStore();
+            lt::parse(text2);
+            lt::LightSet* back2 = lt::findSet("ENBProj", 0, false);
+            CHECK(back2 && back2->enb.n == 2 && back2->enb.k[1].set == ((1u << 12) | (1u << ed::I_DIST)) && back2->enb.k[0].set == lights::kEnbAll,
+                  "which options a keyframe sets survives the file too");
+            lt::clearStore();
+            std::string old46 = "EscoEditorLights 2\nscope 0 Old46\ne 500";
+            for (int q = 0; q < ed::N; ++q) old46 += " 2";
+            old46 += "\n";
+            lt::parse(old46);
+            lt::LightSet* o46 = lt::findSet("Old46", 0, false);
+            CHECK(o46 && o46->enb.n == 1 && o46->enb.k[0].set == lights::kEnbAll && o46->enb.k[0].v[5] == 2.0f,
+                  "a key written by 4.6 (every option, no mask) reads back as setting every option");
             lt::clearStore();
         }
     }

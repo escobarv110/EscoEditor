@@ -137,24 +137,54 @@ namespace enbdof
 	}
 
 	// ---- finding ENB and its DOF shader ----------------------------------------
+	// The SDK is part of ENB's own d3d11.dll - NVE's has it - and nothing has
+	// to be installed. But ENB loads the SYSTEM d3d11.dll too, under the same
+	// name, and asking Windows for "d3d11.dll" can hand back that one, which
+	// has none of it. So every loaded module is asked for the export instead,
+	// whatever it is called and wherever it was loaded from.
+	int s_modsSeen = 0;
+
 	bool resolve()
 	{
 		if (s_found) return true;
-		static const char* const kMods[] = { "d3d11.dll", "dxgi.dll", "d3d9.dll" };
-		for (const char* name : kMods)
+		HMODULE mods[96] = {};
+		char names[96][48] = {};
+		int n = 0;
+		__try
 		{
-			HMODULE h = GetModuleHandleA(name);
-			if (!h) continue;
-			FnSet set = (FnSet)GetProcAddress(h, "ENBSetParameter");
-			FnGet get = (FnGet)GetProcAddress(h, "ENBGetParameter");
+			const uint8_t* peb = (const uint8_t*)__readgsqword(0x60);
+			const uint8_t* ldr = *(const uint8_t* const*)(peb + 0x18);
+			const LIST_ENTRY* head = (const LIST_ENTRY*)(ldr + 0x20);        // InMemoryOrderModuleList
+			for (const LIST_ENTRY* e = head->Flink; e && e != head && n < 96; e = e->Flink)
+			{
+				const uint8_t* entry = (const uint8_t*)e - 0x10;              // LDR_DATA_TABLE_ENTRY
+				struct NtStr { uint16_t Length, MaximumLength; const wchar_t* Buffer; };
+				const NtStr* nm = (const NtStr*)(entry + 0x58);               // BaseDllName
+				mods[n] = *(HMODULE const*)(entry + 0x30);                    // DllBase
+				int k = 0;
+				for (int i = 0; nm->Buffer && i < nm->Length / 2 && k < 47; ++i)
+					names[n][k++] = nm->Buffer[i] < 128 ? (char)nm->Buffer[i] : '_';
+				names[n][k] = 0;
+				++n;
+			}
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER) {}
+		s_modsSeen = n;
+		for (int i = 0; i < n; ++i)
+		{
+			if (!mods[i]) continue;
+			FnSet set = (FnSet)GetProcAddress(mods[i], "ENBSetParameter");
+			FnGet get = (FnGet)GetProcAddress(mods[i], "ENBGetParameter");
 			if (!set || !get) continue;
-			s_set = set; s_get = get;
-			s_ver = (FnVer)GetProcAddress(h, "ENBGetSDKVersion");
-			s_setCb = (FnSetCb)GetProcAddress(h, "ENBSetCallbackFunction");
+			s_set = set;
+			s_get = get;
+			s_ver = (FnVer)GetProcAddress(mods[i], "ENBGetSDKVersion");
+			s_setCb = (FnSetCb)GetProcAddress(mods[i], "ENBSetCallbackFunction");
 			__try { s_sdk = s_ver ? s_ver() : 0; }
 			__except (EXCEPTION_EXECUTE_HANDLER) { s_sdk = 0; }
 			s_found = true;
-			logf("enb: ENBSeries found in %s (SDK %ld) - the ENB option can drive its depth of field", name, s_sdk);
+			logf("enb: ENB found - %s at %p exports its SDK (version %ld); the ENB option can drive its depth of field",
+				names[i], (void*)mods[i], s_sdk);
 			return true;
 		}
 		return false;
@@ -262,12 +292,22 @@ namespace enbdof
 
 	// What the Rockstar Editor's keyframes ask of ENB at `t`. Pure enough to be
 	// tested: works on the two keyframes it is given.
-	void applyEditor(const EdDof& a, const EdDof& b, float t, float scale, float* v, char* line, int cap)
+	// The game's intensity is shown as a percentage in its menu. Stored 1..10
+	// it is used as it is; stored 0..1 it is scaled to match.
+	inline float intensity10(float x) { return (x > 0.0f && x < 1.0f) ? x * 10.0f : x; }
+	int s_rawLogs = 0;
+
+	// `filled`: options a keyframe of this clip sets itself; those are left alone.
+	void applyEditor(const EdDof& a, const EdDof& b, float t, float scale, float* v, char* line, int cap, uint32_t filled = 0)
 	{
+		const bool ownDist = (filled & (1u << I_DIST)) != 0;
+		const bool ownAp   = (filled & (1u << I_APERTURE)) != 0;
+		const bool ownAuto = (filled & (1u << I_AUTO_APERTURE)) != 0;
+		if (s_rawLogs < 1 && a.have) { ++s_rawLogs; logf("enb: the keyframe's stored DOF intensity reads %.3f (mode %s)", a.intensity, dof::modeName(a.mode)); }
 		if (a.mode == dof::MODE_NONE)
 		{
-			v[I_APERTURE] = 0.0f;
-			v[I_AUTO_APERTURE] = 0.0f;
+			if (!ownAp) v[I_APERTURE] = 0.0f;
+			if (!ownAuto) v[I_AUTO_APERTURE] = 0.0f;
 			if (line) snprintf(line, cap, "keyframe DOF None - no blur");
 			return;
 		}
@@ -281,14 +321,15 @@ namespace enbdof
 		if (blend) u = (t - a.t) / (b.t - a.t);
 		if (!(u >= 0.0f)) u = 0.0f;
 		if (u > 1.0f) u = 1.0f;
-		const float inten = a.intensity + ((blend ? b.intensity : a.intensity) - a.intensity) * u;
-		v[I_APERTURE] = inten * scale;
-		v[I_AUTO_APERTURE] = inten * scale;
+		const float ia = intensity10(a.intensity), ib = blend ? intensity10(b.intensity) : ia;
+		const float inten = ia + (ib - ia) * u;
+		if (!ownAp) v[I_APERTURE] = inten * scale;
+		if (!ownAuto) v[I_AUTO_APERTURE] = inten * scale;
 		if (a.focus == dof::FOCUS_MANUAL)
 		{
 			const bool blendDist = blend && b.focus == dof::FOCUS_MANUAL;
 			const float d = a.dist + ((blendDist ? b.dist : a.dist) - a.dist) * u;
-			if (d > 0.0f) v[I_DIST] = d;
+			if (d > 0.0f && !ownDist) v[I_DIST] = d;
 			if (line) snprintf(line, cap, "keyframe DOF Custom, manual focus %.2f m, intensity %.1f -> aperture %.2f", v[I_DIST], inten, v[I_APERTURE]);
 		}
 		else if (line)
@@ -304,24 +345,28 @@ namespace enbdof
 	Want s_want = {};
 	volatile LONG s_wantSeq = 0;
 
-	void compute(Want& w)
+	// What ENB should hold at `t` ms into the clip: the session values, then the
+	// options this clip's keyframes set themselves, then the game's own DOF of
+	// the keyframes either side for whatever those did not set.
+	void computeAt(float t, Want& w)
 	{
 		w.at = GetTickCount64();
 		w.on = g_cfg.enbDof;
 		memcpy(w.v, s_manual, sizeof(w.v));
-		if (!w.on) return;
-		const float t = game::replayTimeMs();
+		uint32_t filled = 0;
 		{
 			lights::Lock lk;
-			if (lights::g_cur && lights::g_cur->enb.n > 0) lights::evalEnb(lights::g_cur->enb, t, w.v, kinds);
+			if (lights::g_cur && lights::g_cur->enb.n > 0) filled = lights::evalEnb(lights::g_cur->enb, t, w.v, kinds);
 		}
 		if (g_cfg.enbFollow)
 		{
 			EdDof a, b;
-			if (dofAround(t, a, b)) applyEditor(a, b, t, g_cfg.enbScale, w.v, s_editorLine, sizeof(s_editorLine));
+			if (dofAround(t, a, b)) applyEditor(a, b, t, g_cfg.enbScale, w.v, s_editorLine, sizeof(s_editorLine), filled);
 			else snprintf(s_editorLine, sizeof(s_editorLine), "no keyframes in this clip yet");
 		}
 	}
+
+	void compute(Want& w) { computeAt(game::replayTimeMs(), w); }
 
 	void push()
 	{
@@ -376,13 +421,118 @@ namespace enbdof
 		if (!last || GetTickCount64() - last > 1000) push();
 	}
 
+	// ---- the ENB rows in each keyframe's Depth of Field menu --------------------
+	//  The game's column draws 16 rows. Its own DOF rows, Copy / Paste / To All
+	//  and the ENB switch take up to eight, so the options come a page at a time:
+	//  an "ENB Options" row picks the page, and at most five rows follow.
+	struct Page { const char* name; int n; int p[5]; };
+	const Page kPages[] = {
+		{ "Focus",      3, { I_DIST, I_APERTURE, 0 } },
+		{ "Blur",       3, { 12, 11, 13 } },
+		{ "Near field", 3, { 1, 2, 5 } },
+		{ "Anamorphic", 2, { 17, 18 } },
+		{ "Quality",    4, { 14, 15, 16, 19 } },
+		{ "Auto-focus", 5, { 6, 7, 8, 9, 10 } },
+		{ "Lens",       3, { 20, 21, 22 } } };
+	constexpr int kPageCount = (int)(sizeof(kPages) / sizeof(kPages[0]));
+	// One press of left or right. The focus distance moves by 15% a press, so
+	// it covers a metre and a hundred metres alike.
+	const float kStep[N] = { 1.0f, 1.0f, 0.25f, 0.0f, 0.05f, 0.1f, 0.05f, 0.25f, 0.1f, 0.01f, 0.01f,
+							 0.1f, 0.1f, 1.0f, 1.0f, 0.1f, 0.1f, 1.0f, 0.1f, 0.1f, 0.02f, 1.0f, 0.02f };
+	int g_page = 0;
+
+	int pageRows()        { return kPages[g_page].n; }
+	int pageParam(int r)  { return (r >= 0 && r < kPages[g_page].n) ? kPages[g_page].p[r] : -1; }
+	const char* pageName() { return kPages[g_page].name; }
+	void nextPage(int d)  { g_page = (g_page + d + kPageCount) % kPageCount; }
+
+	bool markerTimeNow(float* t)
+	{
+		const void* m = game::currentMarker();
+		if (!m) return false;
+		__try { memcpy(t, (const uint8_t*)m + mk::OFF_TimeMs, 4); }
+		__except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+		return isfinite(*t);
+	}
+
+	// This keyframe's value of option p, and whether it is its own.
+	float valueHere(int p, bool* own)
+	{
+		*own = false;
+		float t;
+		if (p < 0 || p >= N || !markerTimeNow(&t)) return p >= 0 && p < N ? s_manual[p] : 0.0f;
+		{
+			lights::Lock lk;
+			float v;
+			if (lights::g_cur && lights::enbKeyValue(lights::g_cur->enb, t, p, &v)) { *own = true; return v; }
+		}
+		Want w;
+		computeAt(t, w);
+		return w.v[p];
+	}
+
+	float stepped(int p, float cur, int delta)
+	{
+		const Def& d = kDefs[p];
+		float v;
+		if (d.kind == K_BOOL) v = cur > 0.5f ? 0.0f : 1.0f;
+		else if (p == I_DIST) v = delta > 0 ? cur * 1.15f + 0.05f : cur / 1.15f - 0.05f;
+		else v = cur + kStep[p] * (float)delta;
+		if (v < d.lo) v = d.lo;
+		if (v > d.hi) v = d.hi;
+		if (d.kind == K_INT) v = floorf(v + 0.5f);
+		else if (d.kind == K_FLOAT) v = floorf(v * 1000.0f + 0.5f) / 1000.0f;
+		return v;
+	}
+
+	// Left / right on an option row: this keyframe gets its own value.
+	void stepHere(int p, int delta)
+	{
+		float t;
+		if (p < 0 || p >= N || !markerTimeNow(&t)) return;
+		bool own;
+		const float nv = stepped(p, valueHere(p, &own), delta);
+		Want w;
+		computeAt(t, w);                     // what the keyframe showed: the seed of a new key
+		lights::Lock lk;
+		if (!lights::g_cur) return;
+		if (lights::setEnbParam(lights::g_cur->enb, t, p, nv, w.v)) lights::markDirty();
+	}
+
+	// Enter on an option row: back to the keyframes around it.
+	void clearHere(int p)
+	{
+		float t;
+		if (p < 0 || p >= N || !markerTimeNow(&t)) return;
+		lights::Lock lk;
+		if (!lights::g_cur) return;
+		lights::clearEnbParam(lights::g_cur->enb, t, p);
+		lights::markDirty();
+	}
+
+	const char* format(int p, float v, char* buf, int cap)
+	{
+		const Def& d = kDefs[p];
+		if (d.kind == K_BOOL) return v > 0.5f ? "On" : "Off";
+		if (d.kind == K_INT) { snprintf(buf, cap, "%d", (int)floorf(v + 0.5f)); return buf; }
+		if (p == I_DIST) { snprintf(buf, cap, v < 10.0f ? "%.2f m" : "%.1f m", v); return buf; }
+		snprintf(buf, cap, "%.2f", v);
+		return buf;
+	}
+
 	// From the worker, about once a second.
 	void poll(ULONGLONG now)
 	{
 		if (now < s_nextPoll) return;
 		s_nextPoll = now + 1000;
 		for (int i = 0; i < N; ++i) kinds[i] = (uint8_t)kDefs[i].kind;
-		if (!resolve()) return;
+		if (!resolve())
+		{
+			static int s_missLogs = 0;
+			if (now > 30000 && s_missLogs++ == 0)
+				logf("enb: none of the %d modules in the game exports ENBSetParameter - no ENB loaded", s_modsSeen);
+			return;
+		}
 		if (!s_ready) { calibrate(); return; }
 		if (!g_cfg.enbDof) rereadBase();
 	}
