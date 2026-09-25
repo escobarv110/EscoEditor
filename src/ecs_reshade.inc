@@ -88,6 +88,12 @@ namespace rs
 		ra::effect_technique        tech = {};
 		ra::effect_uniform_variable var[V_VARS] = {};
 		Frame                       fr = {};
+		// EscoFocus: the depth in the middle of the picture, read back for the ENB option
+		ra::effect_technique        focusTech = {};
+		ra::effect_texture_variable focusTex = {};
+		ra::resource                staging[3] = {};
+		uint32_t                    focusFrame = 0;
+		bool                        focusLooked = false, focusOn = false;
 	};
 	constexpr int kMaxEntries = 4;
 	Entry g_entries[kMaxEntries];
@@ -350,6 +356,58 @@ namespace rs
 		atCopy(cmd, dst); return false;
 	}
 
+	// --- the depth in the middle of the picture (ENB option, Auto focus) ---------
+	// EscoFocus writes it into a 1x1 R32F texture during ReShade's effects.
+	// Right after them it is copied into one of three CPU-readable textures,
+	// and the one written two frames ago is read: by then the GPU is done
+	// with it, so reading never stalls the frame.
+	int g_focusLogs = 0;
+
+	void readFocus(Entry& e, ra::command_list* cmd)
+	{
+		ra::device* dev = e.rt->get_device();
+		ra::resource_view srv = {}, srvS = {};
+		e.rt->get_texture_binding(e.focusTex, &srv, &srvS);
+		if (!srv.handle) return;
+		const ra::resource src = dev->get_resource_from_view(srv);
+		if (!src.handle) return;
+		for (ra::resource& st : e.staging)
+			if (!st.handle &&
+				!dev->create_resource(ra::resource_desc(1, 1, 1, 1, ra::format::r32_float, 1, ra::memory_heap::gpu_to_cpu, ra::resource_usage::copy_dest),
+					nullptr, ra::resource_usage::copy_dest, &st))
+			{
+				if (g_focusLogs++ < 2) logf("reshade: could not make a readable texture for EscoFocus - the ENB option's Auto focus has no measurement");
+				return;
+			}
+		const uint32_t w = e.focusFrame % 3;
+		const ra::resource_usage from = ra::resource_usage::shader_resource, to = ra::resource_usage::copy_source;
+		cmd->barrier(1, &src, &from, &to);
+		cmd->copy_resource(src, e.staging[w]);
+		cmd->barrier(1, &src, &to, &from);
+		if (e.focusFrame >= 2)
+		{
+			const ra::resource r = e.staging[(e.focusFrame + 1) % 3];      // written two frames ago
+			ra::subresource_data data = {};
+			if (dev->map_texture_region(r, 0, nullptr, ra::map_access::read_only, &data) && data.data)
+			{
+				float d = 0.0f;
+				memcpy(&d, data.data, 4);
+				dev->unmap_texture_region(r, 0);
+				enbdof::setCentre(d);
+				if (g_focusLogs < 1) { ++g_focusLogs; logf("reshade: EscoFocus reads the middle of the picture - raw depth %.5f", d); }
+			}
+		}
+		++e.focusFrame;
+	}
+
+	void dropStaging(Entry& e)
+	{
+		ra::device* dev = e.rt ? e.rt->get_device() : nullptr;
+		for (ra::resource& st : e.staging)
+			if (st.handle && dev) { dev->destroy_resource(st); st = {}; }
+		e.focusFrame = 0;
+	}
+
 	// --- ReShade's own frame ---------------------------------------------------
 	void refreshLive()
 	{
@@ -390,6 +448,20 @@ namespace rs
 		}
 
 		Entry* m = mainEntry();
+
+		// EscoFocus runs in ReShade's own pass while the ENB option is on
+		if (!e->focusLooked)
+		{
+			e->focusLooked = true;
+			e->focusTech = rt->find_technique(kEffect, "EscoFocus");
+			e->focusTex = rt->find_texture_variable(kEffect, "EE_FocusTex");
+			if (e == m && (!e->focusTech.handle || !e->focusTex.handle))
+				logf("reshade: the loaded EscoFlare.fx has no EscoFocus - an older copy? Press Reload in ReShade (the ENB option's Auto focus needs it)");
+		}
+		const bool wantFocus = e == m && e->focusTech.handle && e->focusTex.handle && enbdof::wantsCentre() && rt->get_effects_state();
+		if (e->focusTech.handle && rt->get_technique_state(e->focusTech) != wantFocus) rt->set_technique_state(e->focusTech, wantFocus);
+		e->focusOn = wantFocus;
+
 		lights::FlareSet F;
 		const bool want = wantNow(F);
 		if (e == m) g_armed = want && rt->get_effects_state();
@@ -421,11 +493,12 @@ namespace rs
 		}
 	}
 
-	void onFinishEffects(ra::effect_runtime* rt, ra::command_list*, ra::resource_view, ra::resource_view)
+	void onFinishEffects(ra::effect_runtime* rt, ra::command_list* cmd, ra::resource_view, ra::resource_view)
 	{
 		if (g_inCall) return;
 		Entry* e = entryFor(rt, false);
 		if (e && e->found && e->fallbackOn) { rt->set_technique_state(e->tech, false); e->fallbackOn = false; }
+		if (e && e->focusOn && cmd) readFocus(*e, cmd);
 	}
 
 	// After ReShade's Present work: report what the frame looked like, then
@@ -463,7 +536,7 @@ namespace rs
 
 	void onReloaded(ra::effect_runtime* rt)
 	{
-		if (Entry* e = entryFor(rt, false)) { e->found = false; e->nextFind = 0; e->fallbackOn = false; }
+		if (Entry* e = entryFor(rt, false)) { e->found = false; e->nextFind = 0; e->fallbackOn = false; e->focusLooked = false; e->focusOn = false; e->focusFrame = 0; }
 		if (g_bound && g_bound->rt == rt) g_bound = nullptr;
 		refreshLive();
 	}
@@ -473,6 +546,7 @@ namespace rs
 		if (Entry* e = entryFor(rt, false))
 		{
 			if (g_bound == e) g_bound = nullptr;
+			dropStaging(*e);
 			*e = Entry();
 		}
 		refreshLive();

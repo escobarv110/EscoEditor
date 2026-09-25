@@ -1,4 +1,4 @@
-EscoEditor.asi 4.13  -  more control for the Rockstar Editor
+EscoEditor.asi 4.14  -  more control for the Rockstar Editor
 ======================================================================
 (formerly EditorCamSpeed.asi - same plugin, new name)
 
@@ -9,6 +9,23 @@ menu, adds scene lights you place in the picture with a 3D gizmo - fixed in
 the world, on the camera, or riding along with a ped, a vehicle or a prop -
 and keeps the free camera speed keys. The editor's own camera path,
 transitions, shake and depth of field are never touched.
+
+WHAT CHANGED IN 4.14
+  - ENB Auto focus is EscoEditor's own now. Asking ENB to switch NVE to its
+    Auto-focus technique was accepted - ENB said so - and changed nothing on
+    screen. Now EscoEditor measures the depth in the middle of the picture
+    (a one-pixel pass, EscoFocus, in EscoFlare.fx - ReShade runs it) and
+    keeps NVE on its Manual technique, with the focus set exactly where that
+    depth is sharp in NVE's own formula. It eases over about a quarter
+    second, like a focus pull. Focus Mode shows how far away that is:
+    "Auto (8.3 m)".
+  - Manual: Enter on Focus Distance focuses on what is in the middle of the
+    picture - the quick way to get the subject sharp, then fine-tune with
+    left/right.
+  - Aperture and Near Field Blur are the Manual technique's, in Auto too.
+  - Needs the new EscoFlare.fx: the plugin copies it into ReShade's shader
+    folder by itself at start; if ReShade says it has no EscoFocus, press
+    Reload in ReShade.
 
 WHAT CHANGED IN 4.13
   - ENB Auto focus blurs. NVE's Auto-focus technique reads its own aperture
@@ -478,7 +495,7 @@ WHAT CHANGED IN 2.9
 
 CHECK YOU HAVE THIS VERSION
   The first line of EscoEditor.log (next to the .asi) must say
-  "EscoEditor 4.13".
+  "EscoEditor 4.14".
 
 INSTALL
   FiveM:          close FiveM, run Install.bat - or copy EscoEditor.asi

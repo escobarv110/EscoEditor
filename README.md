@@ -9,7 +9,7 @@ place in the picture with a 3D gizmo and key over the clip**.
 No ScriptHookV, no Rockstar Editor+, no Menyoo. One `.asi`, and it runs
 alongside Rockstar Editor+ if you use that too.
 
-<sub>Version 4.13 · GTA V b3258–b3751 and singleplayer b3407 · MIT</sub>
+<sub>Version 4.14 · GTA V b3258–b3751 and singleplayer b3407 · MIT</sub>
 
 ---
 

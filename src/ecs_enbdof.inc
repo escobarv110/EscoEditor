@@ -115,6 +115,7 @@ namespace enbdof
 	// interest itself. Each reads its own aperture and near field power.
 	enum { TECH_AUTO = 0, TECH_MANUAL = 1 };
 	int s_tech = -1;                      // -1 not known yet: taken as Manual
+	inline bool wantsCentre();
 
 	uint8_t kinds[N] = {};                // for lights::evalEnb, filled on start
 
@@ -208,6 +209,39 @@ namespace enbdof
 		if (!(d > 2.0f)) return 2.0f * n;
 		return n * (d * d + d * sqrtf(d * d - 4.0f)) * 0.5f;
 	}
+
+	// ---- what is in the middle of the picture ------------------------------------
+	// Auto focus (4.14). Asking ENB to switch NVE to its Auto-focus technique
+	// was taken - ENB said so - and changed nothing on screen. So EscoEditor
+	// measures instead: EscoFlare.fx's EscoFocus pass writes the raw depth at
+	// the centre into one pixel, ecs_reshade.inc reads it back (two frames
+	// late, never waiting on the GPU), and NVE stays on its Manual technique
+	// with its Distance set where that depth is sharp. NVE's manual pass is
+	// sharp where 1 - 1/(Distance^2 x depth) equals the depth, so for a raw
+	// depth d that is Distance = 1 / sqrt(d (1 - d)) - exactly, whatever the
+	// camera's near clip.
+	volatile float     s_centreRaw = 0.0f;
+	volatile ULONGLONG s_centreAt = 0;
+	float s_autoD = 0.0f;                 // the smoothed Distance Auto sends
+	ULONGLONG s_autoAt = 0;
+	int   s_autoLogs = 0;
+
+	void setCentre(float d)
+	{
+		if (!(d > 0.0f && d < 1.0f)) return;
+		s_centreRaw = d;
+		s_centreAt = GetTickCount64();
+	}
+	bool centreFresh() { return s_centreAt && GetTickCount64() - s_centreAt < 750; }
+	inline float distanceForRaw(float d)
+	{
+		if (d < 1e-6f) d = 1e-6f;
+		if (d > 0.75f) d = 0.75f;
+		return 1.0f / sqrtf(d * (1.0f - d));
+	}
+	float nearClip();
+	// For showing only: GTA's depth is reversed (near / z).
+	float centreMetres() { const float d = s_centreRaw; return d > 1e-6f ? nearClip() / d : 0.0f; }
 
 	// ---- finding ENB and its DOF shader ----------------------------------------
 	// The SDK is part of ENB's own d3d11.dll - NVE's has it - and nothing has
@@ -400,6 +434,7 @@ namespace enbdof
 			: "technique (not readable) - taken as \"Gameplay DOF Manual\"");
 	}
 	inline bool techAuto() { return s_tech == TECH_AUTO; }
+	inline bool wantsCentre() { return s_ready && g_cfg.enbDof; }
 
 	// Which filename / category pair ENB wants for a shader parameter is not
 	// written down anywhere reliable, so each plausible one is asked for a value
@@ -631,21 +666,45 @@ namespace enbdof
 			}
 		}
 		const float n = nearClip();
+		// Auto: NVE's Distance follows what is in the middle of the picture,
+		// eased so the focus pulls rather than jumps (about a quarter second).
+		const bool autoF = s_known[I_FOCUS] ? w.v[I_FOCUS] < 0.5f : false;
+		float autoD = 0.0f;
+		if (autoF && centreFresh())
+		{
+			const float target = distanceForRaw(s_centreRaw);
+			const ULONGLONG t = GetTickCount64();
+			const float dt = s_autoAt ? (float)(t - s_autoAt) * 0.001f : 1.0f;
+			s_autoAt = t;
+			const float k = dt >= 0.25f ? 1.0f : dt / 0.25f;
+			s_autoD = s_autoD > 0.0f ? s_autoD + (target - s_autoD) * k : target;
+			autoD = s_autoD;
+			if (s_autoLogs < 3) { ++s_autoLogs; logf("enb: Auto focus - the middle of the picture is at depth %.5f, about %.1f m: NVE's Distance %.2f", s_centreRaw, centreMetres(), target); }
+		}
+		else if (autoF && s_autoLogs < 3 && GetTickCount64() > 60000)
+		{
+			s_autoLogs = 3;
+			logf("enb: Auto focus has nothing measured - it needs ReShade with EscoFlare.fx (its EscoFocus pass). The keyframe's Focus Distance is used meanwhile.");
+		}
 		for (int i = 0; i < N; ++i)
 		{
 			if (!s_known[i]) continue;
-			const float out = i == I_DIST ? enbDistance(w.v[i], n) : w.v[i];   // metres -> NVE's Distance
+			// NVE always runs its Manual technique (TECHNIQUE 1); Auto is ours.
+			const float out = i == I_FOCUS ? (float)TECH_MANUAL
+							: i == I_MOUSE ? 0.0f
+							: i == I_DIST ? (autoD > 0.0f ? autoD : enbDistance(w.v[i], n))   // metres -> NVE's Distance
+							: w.v[i];
 			if (s_havePushed[i] && same(i, s_pushed[i], out)) continue;
 			if (writeValue(i, out))
 			{
 				if (i == I_FOCUS && s_havePushed[i])
-					for (int j = 0; j < N; ++j) if (j != I_FOCUS) s_havePushed[j] = false;   // the other technique: all of it again
+					for (int j = 0; j < N; ++j) if (j != I_FOCUS) s_havePushed[j] = false;   // a technique change: all of it again
 				s_pushed[i] = out;
 				s_havePushed[i] = true;
 				s_dirty = true;
 				// The first few pushes of what matters are asked back, so the log
 				// shows plainly whether ENB's shader took them.
-				if ((i == I_DIST || i == I_APERTURE || i == I_FOCUS) && s_checkLogs < 8)
+				if ((i == I_DIST || i == I_APERTURE || i == I_FOCUS) && s_checkLogs < 8 && !(i == I_DIST && autoD > 0.0f))
 				{
 					++s_checkLogs;
 					float back = -12345.0f;
@@ -724,7 +783,7 @@ namespace enbdof
 		auto add = [&](int p) { if ((isVirtual(p) || s_known[p]) && s_listN < 16) s_list[s_listN++] = p; };
 		add(I_FOCUS);
 		if (!autoF) add(I_DIST);
-		if (s_known[autoF ? I_AUTO_APERTURE : I_APERTURE]) add(V_APERTURE);
+		if (s_known[I_APERTURE]) add(V_APERTURE);
 		if (s_known[I_NEAR]) add(V_NEAR);
 		add(12);                                          // Blur : Size
 		add(14);                                          // DOF : Maximum size
@@ -782,7 +841,7 @@ namespace enbdof
 	float virtualHere(int p, bool* own)
 	{
 		bool o1 = false, o2 = false;
-		const bool a = focusAutoHere();
+		const bool a = false;                // 4.14: NVE runs its Manual technique, Auto included
 		float r = 0.0f;
 		switch (p)
 		{
@@ -857,7 +916,7 @@ namespace enbdof
 		Want w;
 		computeAt(t, w);                     // what the keyframe showed: the seed of a new key
 		bool own;
-		const bool a = focusAutoHere();
+		const bool a = false;                // 4.14: NVE runs its Manual technique, Auto included
 		const float cur = valueHere(p, &own);
 		bool ch = false;
 		auto put = [&](int q, float v) { if (lights::setEnbParam(tr, t, q, v, w.v)) ch = true; };
@@ -896,21 +955,8 @@ namespace enbdof
 			break;
 		}
 		case I_FOCUS:
-		{
-			// The blur keeps its strength across the switch: the other
-			// technique's aperture and near field get the same percentages.
-			bool o;
-			const float pc = valueHere(V_APERTURE, &o), nr = valueHere(V_NEAR, &o);
-			const float nv = stepped(p, cur, delta);
-			put(I_FOCUS, nv);
-			const bool na = nv < 0.5f;
-			if (na != a)
-			{
-				put(na ? I_AUTO_APERTURE : I_APERTURE, na ? autoFromPct(pc) : manualFromPct(pc));
-				if (nr > 0.0f) put(na ? I_AUTO_NEARPOWER : I_NEARPOWER, powerFromPct(nr));
-			}
+			put(I_FOCUS, stepped(p, cur, delta));
 			break;
-		}
 		default:
 			put(p, stepped(p, cur, delta));
 			break;
@@ -926,6 +972,14 @@ namespace enbdof
 		lights::Lock lk;
 		if (!lights::g_cur) return;
 		auto clr = [&](int q) { lights::clearEnbParam(lights::g_cur->enb, t, q); };
+		if (p == I_DIST && centreFresh())
+		{
+			// Enter on Focus Distance: focus on what is in the middle of the picture
+			Want w;
+			computeAt(t, w);
+			if (lights::setEnbParam(lights::g_cur->enb, t, I_DIST, floorf(centreMetres() * 100.0f + 0.5f) / 100.0f, w.v)) lights::markDirty();
+			return;
+		}
 		switch (p)
 		{
 		case V_APERTURE:   clr(I_APERTURE); clr(I_AUTO_APERTURE); break;
@@ -943,7 +997,14 @@ namespace enbdof
 		if (p == V_ANAMORPHIC) { if (v <= 0.0f) return "Off"; snprintf(buf, cap, "%.2fx", v); return buf; }
 		if (p < 0 || p >= N) return "";
 		const Def& d = kDefs[p];
-		if (p == I_FOCUS) return v > 0.5f ? "Manual" : "Auto";
+		if (p == I_FOCUS)
+		{
+			if (v > 0.5f) return "Manual";
+			if (!centreFresh()) return "Auto";
+			const float m = centreMetres();
+			snprintf(buf, cap, m < 10.0f ? "Auto (%.1f m)" : "Auto (%.0f m)", m);
+			return buf;
+		}
 		if (d.kind == K_BOOL) return v > 0.5f ? "On" : "Off";
 		if (d.kind == K_INT) { snprintf(buf, cap, "%d", (int)floorf(v + 0.5f)); return buf; }
 		if (p == I_DIST) { snprintf(buf, cap, v < 10.0f ? "%.2f m" : "%.1f m", v); return buf; }
@@ -956,11 +1017,11 @@ namespace enbdof
 	{
 		switch (p)
 		{
-		case I_FOCUS:           return "Auto: ENB focuses on what is in the middle of the picture. Manual: at Focus Distance.";
+		case I_FOCUS:           return "Auto: the focus follows what is in the middle of the picture, as the clip plays. Manual: at Focus Distance.";
 		case V_APERTURE:        return "How strong the blur is - how soon things go soft behind and in front of the focus.";
 		case V_NEAR:            return "Blur in front of the focus too: Off, or how much of the blur behind it.";
 		case V_ANAMORPHIC:      return "Oval bokeh, like an anamorphic lens: Off, or how stretched.";
-		case I_DIST:            return "Where the picture is sharp, in metres from the camera.";
+		case I_DIST:            return centreFresh() ? "Where the picture is sharp, in metres. Enter: focus on what is in the middle of the picture." : "Where the picture is sharp, in metres from the camera.";
 		case I_APERTURE:        return "How fast the blur comes in past the focus. Small numbers: gentle.";
 		case I_AUTO_APERTURE:   return "How strong the blur is.";
 		case I_NEAR:            return "Blur what is closer than the focus too.";

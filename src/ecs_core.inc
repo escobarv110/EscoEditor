@@ -1,4 +1,4 @@
-	constexpr const char* kVersion = "4.13";
+	constexpr const char* kVersion = "4.14";
 
 	// ------------------------------------------------------------------ paths
 	char    g_dir[MAX_PATH]  = {};   // folder of the .asi, trailing backslash

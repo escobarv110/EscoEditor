@@ -234,3 +234,32 @@ technique EscoFlare < hidden = true;
 {
 	pass Flare { VertexShader = PostProcessVS; PixelShader = PS_EE_Flare; }
 }
+
+// ---------------------------------------------------------------------------
+// EscoFocus: the raw depth at the middle of the picture, into one pixel that
+// EscoEditor reads back - it is how the ENB option's Auto focus knows what is
+// in front of the camera, and how Manual shows how far away it is. The raw
+// value, not a distance: NVE's ENB depth of field works on the same raw depth.
+// A small plus of samples, the centre counting most.
+// ---------------------------------------------------------------------------
+texture EE_FocusTex { Width = 1; Height = 1; Format = R32F; };
+
+float PS_EE_Focus(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
+{
+	const float2 c = float2(0.5, 0.5);
+	const float2 o = float2(0.006 / BUFFER_ASPECT_RATIO, 0.006);
+	float d = tex2Dlod(ReShade::DepthBuffer, float4(c, 0.0, 0.0)).x * 4.0;
+	d += tex2Dlod(ReShade::DepthBuffer, float4(c + float2(o.x, 0.0), 0.0, 0.0)).x;
+	d += tex2Dlod(ReShade::DepthBuffer, float4(c - float2(o.x, 0.0), 0.0, 0.0)).x;
+	d += tex2Dlod(ReShade::DepthBuffer, float4(c + float2(0.0, o.y), 0.0, 0.0)).x;
+	d += tex2Dlod(ReShade::DepthBuffer, float4(c - float2(0.0, o.y), 0.0, 0.0)).x;
+	return d / 8.0;
+}
+
+technique EscoFocus < hidden = true; enabled = false;
+	ui_label = "EscoFocus";
+	ui_tooltip = "EscoEditor measures the depth in the middle of the picture with this, for its ENB focus. Nothing to switch on here.";
+>
+{
+	pass Focus { VertexShader = PostProcessVS; PixelShader = PS_EE_Focus; RenderTarget = EE_FocusTex; }
+}

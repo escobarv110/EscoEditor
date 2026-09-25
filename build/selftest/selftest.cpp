@@ -687,8 +687,33 @@ int main(int argc, char** argv)
             CHECK(fabsf(ed::autoFromPct(50.0f) - 5.0f) < 1e-6f && fabsf(ed::pctAuto(0.5f) - 5.0f) < 1e-4f,
                   "Auto: 50%% is 5 on its own scale, and NVE's 0.5 there is only 5%% - the Auto that blurred nothing");
             ed::s_manual[ed::I_AUTO_APERTURE] = 5.0f;
+            ed::s_manual[ed::I_APERTURE] = 0.0625f;
             bool own;
-            CHECK(fabsf(ed::valueHere(ed::V_APERTURE, &own) - 50.0f) < 1e-3f, "the Aperture row reads the running technique's own aperture");
+            CHECK(fabsf(ed::valueHere(ed::V_APERTURE, &own) - 50.0f) < 1e-3f,
+                  "the Aperture row reads the Manual technique's aperture - NVE runs Manual, Auto included (4.14)");
+
+            // Auto focus from the measured centre depth: NVE's own formula is sharp exactly there
+            {
+                bool exact = true, agrees = true;
+                const float raws[] = { 0.5f, 0.1f, 0.02f, 0.004f, 0.0005f, 0.00005f };
+                for (float d : raws)
+                {
+                    const float D = ed::distanceForRaw(d);
+                    const float focus = 1.0f - 1.0f / (D * D * d);
+                    if (fabsf(focus - d) > 1e-4f * (d > 0.01f ? 1.0f : 0.1f) + 1e-6f) exact = false;
+                    const float metres = 0.1f / d;                                // what the menu shows
+                    if (metres > 0.25f && fabsf(ed::enbDistance(metres, 0.1f) - D) > 1e-3f * D) agrees = false;
+                }
+                CHECK(exact, "a measured raw depth d gives NVE's Distance 1/sqrt(d(1-d)), where its manual pass is sharp at exactly d");
+                CHECK(agrees, "and that is the same Distance the menu's metres give for it - the two ways agree");
+                ed::setCentre(0.01f);
+                char ab[24];
+                CHECK(ed::centreFresh() && !strncmp(ed::format(ed::I_FOCUS, 0.0f, ab, 24), "Auto (", 6) && !strcmp(ed::format(ed::I_FOCUS, 1.0f, ab, 24), "Manual"),
+                      "Focus Mode shows how far away the middle of the picture is while Auto (%s)", ed::format(ed::I_FOCUS, 0.0f, ab, 24));
+                ed::setCentre(2.0f);
+                CHECK(ed::s_centreRaw == 0.01f, "a depth outside 0..1 is not taken");
+                ed::s_centreAt = 0;
+            }
             CHECK(fabsf(ed::powerFromPct(50.0f) - 2.0f) < 1e-6f && fabsf(ed::nearPct(2.0f) - 50.0f) < 1e-4f && ed::nearPct(0.5f) == 100.0f,
                   "Near Field Blur 50%% is a near field power of 2 (the near blur halved)");
             CHECK(ed::valueHere(ed::V_NEAR, &own) < 0.0f && !strcmp(ed::format(ed::V_NEAR, -1.0f, fb0, 16), "Off") &&
