@@ -37,6 +37,32 @@ static int (*mhOrig2)(int) = nullptr;
 __declspec(noinline) int mhDetour(int x) { return mhOrig(x) * 10; }
 __declspec(noinline) int mhDetour2(int x) { return mhOrig2(x) * 7; }
 
+// A stand-in for the game's IReplayMarkerStorage: TryGet (+0xA8) and Count
+// (+0x108) over three keyframes, for the ENB keyframe-by-keyframe checks.
+namespace fakestore
+{
+    alignas(16) uint8_t g_rec[3][0x1C0] = {};
+    int g_n = 0;
+    void* __fastcall tryGet(void*, unsigned i) { return (int)i < g_n ? g_rec[i] : nullptr; }
+    int   __fastcall count(void*) { return g_n; }
+    void* g_vt[0x120 / 8] = {};
+    struct Obj { void** vt; } g_obj = { g_vt };
+    void* g_ptr = &g_obj;
+    void install(const float* times, int n)
+    {
+        g_vt[0xA8 / 8] = (void*)&tryGet;
+        g_vt[0x108 / 8] = (void*)&count;
+        g_n = n;
+        for (int i = 0; i < n; ++i)
+        {
+            memset(g_rec[i], 0, sizeof(g_rec[i]));
+            memcpy(g_rec[i] + mk::OFF_TimeMs, &times[i], 4);
+        }
+        game::a_MarkerStorage = (uintptr_t)&g_ptr;
+    }
+    void remove() { game::a_MarkerStorage = 0; g_n = 0; }
+}
+
 int main(int argc, char** argv)
 {
     // With a real cameras.ymt: load it and swap it out of PSO's big-endian
@@ -593,14 +619,14 @@ int main(int argc, char** argv)
         a.have = true; a.mode = dof::MODE_CUSTOM; a.focus = dof::FOCUS_MANUAL; a.dist = 4.0f;  a.intensity = 50.0f;  a.t = 0.0f;
         b.have = true; b.mode = dof::MODE_CUSTOM; b.focus = dof::FOCUS_MANUAL; b.dist = 12.0f; b.intensity = 100.0f; b.t = 1000.0f;
         ed::applyEditor(a, b, 0.0f, 1.0f, v, nullptr, 0);
-        CHECK(fabsf(v[ed::I_DIST] - 4.0f) < 1e-4f && fabsf(v[ed::I_APERTURE] - 0.125f) < 1e-5f && fabsf(v[ed::I_AUTO_APERTURE] - 1.0f) < 1e-5f,
-              "following a Custom keyframe: focus at its 4 m, intensity 50%% = aperture 0.125 (Auto-focus 1.0) (%.2f m, %.4f)",
+        CHECK(fabsf(v[ed::I_DIST] - 4.0f) < 1e-4f && fabsf(v[ed::I_APERTURE] - 0.06f) < 1e-5f && fabsf(v[ed::I_AUTO_APERTURE] - 1.0f) < 1e-5f,
+              "following a Custom keyframe: focus at its 4 m, intensity 50%% = Aperture 50%% (0.06) (%.2f m, %.4f)",
               v[ed::I_DIST], v[ed::I_APERTURE]);
         ed::applyEditor(a, b, 500.0f, 1.0f, v, nullptr, 0);
-        CHECK(fabsf(v[ed::I_DIST] - 8.0f) < 1e-4f && fabsf(v[ed::I_APERTURE] - 0.28125f) < 1e-5f && fabsf(v[ed::I_AUTO_APERTURE] - 1.5f) < 1e-5f,
-              "halfway to the next keyframe it blends: 8 m, 75%% = aperture 0.281 (%.2f m, %.4f)", v[ed::I_DIST], v[ed::I_APERTURE]);
+        CHECK(fabsf(v[ed::I_DIST] - 8.0f) < 1e-4f && fabsf(v[ed::I_APERTURE] - 0.09f) < 1e-5f && fabsf(v[ed::I_AUTO_APERTURE] - 1.5f) < 1e-5f,
+              "halfway to the next keyframe it blends: 8 m, 75%% = aperture 0.09 (%.2f m, %.4f)", v[ed::I_DIST], v[ed::I_APERTURE]);
         ed::applyEditor(b, b, 1000.0f, 1.0f, v, nullptr, 0);
-        CHECK(fabsf(v[ed::I_APERTURE] - 0.5f) < 1e-5f, "100%% is NVE's own aperture, 0.5 (%.3f)", v[ed::I_APERTURE]);
+        CHECK(fabsf(v[ed::I_APERTURE] - 0.12f) < 1e-5f, "100%% is the most blur, aperture 0.12 (%.3f)", v[ed::I_APERTURE]);
 
         ed::EdDof none = a;
         none.mode = dof::MODE_NONE;
@@ -622,7 +648,7 @@ int main(int argc, char** argv)
         float af[ed::N] = {};
         af[ed::I_DIST] = 7.0f;
         ed::applyEditor(autoF, autoF, 0.0f, 1.0f, af, nullptr, 0);
-        CHECK(af[ed::I_DIST] == 4.0f && fabsf(af[ed::I_APERTURE] - 0.125f) < 1e-5f,
+        CHECK(af[ed::I_DIST] == 4.0f && fabsf(af[ed::I_APERTURE] - 0.06f) < 1e-5f,
               "auto focus: NVE's Manual technique cannot measure one, so the keyframe's own focal distance is used");
 
         // NVE's Distance is not metres: the plane in focus is Distance^2 x near x (1 - near / z)
@@ -669,25 +695,35 @@ int main(int argc, char** argv)
             for (int i = 0; i < ed::N; ++i) ed::s_known[i] = !ed::isLabel(i);
             ed::s_manual[ed::I_FOCUS] = 1.0f; ed::s_manual[ed::I_NEAR] = 1.0f; ed::s_manual[17] = 1.0f;
             ed::buildList();
-            const int wantManual[] = { ed::I_FOCUS, ed::I_DIST, ed::V_APERTURE, ed::V_NEAR, 12, 14, 11, ed::V_ANAMORPHIC };
-            bool listOk = ed::listCount() == 8;
-            for (int k = 0; listOk && k < 8; ++k) if (ed::listParam(k) != wantManual[k]) listOk = false;
-            CHECK(listOk && ed::listParam(8) == -1, "Manual: Focus Mode, Focus Distance, Aperture, Near Field Blur, Blur Size, Maximum Size, Chromatic Spread, Anamorphic - 8 rows, fits the column");
+            const int wantManual[] = { ed::I_FOCUS, ed::I_DIST, ed::V_APERTURE, ed::V_NEAR, 11, ed::V_ANAMORPHIC };
+            bool listOk = ed::listCount() == 6;
+            for (int k = 0; listOk && k < 6; ++k) if (ed::listParam(k) != wantManual[k]) listOk = false;
+            CHECK(listOk && ed::listParam(6) == -1, "Manual: Focus Mode, Focus Distance, Aperture, Near Field Blur, Chromatic Spread, Anamorphic - no size rows, Aperture is the amount");
             ed::s_manual[ed::I_FOCUS] = 0.0f; ed::s_manual[ed::I_NEAR] = 0.0f; ed::s_manual[17] = 0.0f;
             ed::buildList();
-            const int wantAuto[] = { ed::I_FOCUS, ed::V_APERTURE, ed::V_NEAR, 12, 14, 11, ed::V_ANAMORPHIC };
-            bool autoOk = ed::listCount() == 7;
-            for (int k = 0; autoOk && k < 7; ++k) if (ed::listParam(k) != wantAuto[k]) autoOk = false;
+            const int wantAuto[] = { ed::I_FOCUS, ed::V_APERTURE, ed::V_NEAR, 11, ed::V_ANAMORPHIC };
+            bool autoOk = ed::listCount() == 5;
+            for (int k = 0; autoOk && k < 5; ++k) if (ed::listParam(k) != wantAuto[k]) autoOk = false;
             CHECK(autoOk, "Auto: the same rows without a distance");
 
             // one Aperture percentage, converted for whichever technique runs
-            CHECK(fabsf(ed::manualFromPct(100.0f) - 0.5f) < 1e-6f && fabsf(ed::manualFromPct(50.0f) - 0.0625f) < 1e-6f &&
-                  fabsf(ed::pctManual(0.0625f) - 50.0f) < 1e-3f && fabsf(ed::pctManual(2.3f) - 100.0f) < 1e-3f,
-                  "Manual: 100%% is NVE's 0.5, 50%% is 0.0625, and 2.30 (spent long before) reads as 100%%");
+            CHECK(ed::manualFromPct(0.0f) == 0.0f && fabsf(ed::manualFromPct(100.0f) - 0.12f) < 1e-6f && fabsf(ed::manualFromPct(50.0f) - 0.06f) < 1e-6f &&
+                  fabsf(ed::pctManual(0.06f) - 50.0f) < 1e-3f && fabsf(ed::pctManual(2.3f) - 100.0f) < 1e-3f,
+                  "Aperture: 0%% is no blur (aperture 0), 50%% is 0.06, 100%% is 0.12, anything bigger reads as 100%%");
+            {
+                float mx = 0.0f, bs = 0.0f;
+                ed::blurSizesFor(0.0f, &mx, &bs);
+                const bool none = mx == 2.0f && bs == 0.0f;
+                ed::blurSizesFor(0.12f, &mx, &bs);
+                const bool full = mx == 20.0f && bs == 2.0f;
+                ed::blurSizesFor(0.06f, &mx, &bs);
+                CHECK(none && full && fabsf(mx - 11.0f) < 1e-4f && fabsf(bs - 1.0f) < 1e-4f,
+                      "the blur's size follows the Aperture too: Maximum size 2..20 and Blur size 0..2 from 0%% to 100%%");
+            }
             CHECK(fabsf(ed::autoFromPct(50.0f) - 5.0f) < 1e-6f && fabsf(ed::pctAuto(0.5f) - 5.0f) < 1e-4f,
                   "Auto: 50%% is 5 on its own scale, and NVE's 0.5 there is only 5%% - the Auto that blurred nothing");
             ed::s_manual[ed::I_AUTO_APERTURE] = 5.0f;
-            ed::s_manual[ed::I_APERTURE] = 0.0625f;
+            ed::s_manual[ed::I_APERTURE] = 0.06f;
             bool own;
             CHECK(fabsf(ed::valueHere(ed::V_APERTURE, &own) - 50.0f) < 1e-3f,
                   "the Aperture row reads the Manual technique's aperture - NVE runs Manual, Auto included (4.14)");
@@ -819,7 +855,7 @@ int main(int argc, char** argv)
             pct.intensity = 0.5f;                         // a fraction: 50%
             float pv[ed::N] = {};
             ed::applyEditor(pct, pct, 0.0f, 2.0f, pv, nullptr, 0);
-            CHECK(fabsf(pv[ed::I_APERTURE] - 0.25f) < 1e-5f, "an intensity stored as 0..1 is a fraction, and the strength multiplies (%.3f)", pv[ed::I_APERTURE]);
+            CHECK(fabsf(pv[ed::I_APERTURE] - 0.12f) < 1e-5f, "an intensity stored as 0..1 is a fraction, and the strength multiplies (%.3f)", pv[ed::I_APERTURE]);
             lights::clearEnbParam(mt, 1000.0f, 12);
             CHECK(mt.n == 0, "handing its only option back removes the keyframe's key");
         }
@@ -863,6 +899,33 @@ int main(int argc, char** argv)
                   "a key written by 4.6 (every option, no mask) reads back as setting every option");
             lt::clearStore();
         }
+    }
+
+    // ---- ENB: keyframe by keyframe, like the game's own DOF (4.15) ------------------
+    {
+        namespace ed = enbdof;
+        for (int i = 0; i < ed::N; ++i) ed::kinds[i] = (uint8_t)ed::kDefs[i].kind;
+        const float times[3] = { 0.0f, 1000.0f, 2000.0f };
+        fakestore::install(times, 3);
+        lights::EnbTrack tr = {};
+        float seed[ed::N] = {};
+        seed[ed::I_APERTURE] = 0.03f;                          // the default: 25%
+        lights::setEnbParam(tr, 1000.0f, ed::I_APERTURE, 0.12f, seed);   // keyframe 2 alone: 100%
+        lights::setEnbParam(tr, 1000.0f, 17, 1.0f, seed);                 // and anamorphic on
+        float o[ed::N];
+        auto at = [&](float t) { memcpy(o, seed, sizeof(o)); ed::evalByMarker(tr, t, o); };
+        at(0.0f);    const float k1 = o[ed::I_APERTURE];
+        at(500.0f);  const float mid = o[ed::I_APERTURE];  const float anaMid = o[17];
+        at(1000.0f); const float k2 = o[ed::I_APERTURE];  const float ana2 = o[17];
+        at(1500.0f); const float after = o[ed::I_APERTURE];
+        at(2000.0f); const float k3 = o[ed::I_APERTURE];   const float ana3 = o[17];
+        at(2600.0f); const float past = o[ed::I_APERTURE];
+        CHECK(fabsf(k1 - 0.03f) < 1e-6f && fabsf(mid - 0.075f) < 1e-6f && fabsf(k2 - 0.12f) < 1e-6f,
+              "a keyframe's own blur is its own: keyframe 1 the default, blending up to keyframe 2's (%.3f %.3f %.3f)", k1, mid, k2);
+        CHECK(fabsf(after - 0.075f) < 1e-6f && fabsf(k3 - 0.03f) < 1e-6f && fabsf(past - 0.03f) < 1e-6f,
+              "and back down to keyframe 3, which has none of its own - it no longer carries on (%.3f %.3f %.3f)", after, k3, past);
+        CHECK(anaMid == 0.0f && ana2 == 1.0f && ana3 == 0.0f, "a switch changes at its keyframe and ends at the next");
+        fakestore::remove();
     }
 
     // ---- a light that flashes ------------------------------------------------------

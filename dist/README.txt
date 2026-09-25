@@ -1,4 +1,4 @@
-EscoEditor.asi 4.14  -  more control for the Rockstar Editor
+EscoEditor.asi 4.15  -  more control for the Rockstar Editor
 ======================================================================
 (formerly EditorCamSpeed.asi - same plugin, new name)
 
@@ -9,6 +9,20 @@ menu, adds scene lights you place in the picture with a 3D gizmo - fixed in
 the world, on the camera, or riding along with a ped, a vehicle or a prop -
 and keeps the free camera speed keys. The editor's own camera path,
 transitions, shake and depth of field are never touched.
+
+WHAT CHANGED IN 4.15
+  - ENB: Aperture is the blur amount - 0% no blur at all, 100% the most, in
+    1% steps (hold to go faster). NVE's blur is three numbers together (its
+    aperture, DOF : Maximum size and Blur : Size); Aperture now sets all
+    three, so the Blur Size and Maximum Size rows are gone. A session starts
+    at 50%.
+  - ENB, keyframe by keyframe like the game's own DOF: each keyframe has its
+    own values - the ones set in its ENB rows, the defaults for the rest -
+    and the picture blends from one keyframe to the next. Before, a value
+    held until another keyframe changed it, so a blurred keyframe kept on
+    blurring the ones after it.
+  - Chromatic Spread colours the blur's edges, so it shows as the blur grows:
+    at a low Aperture there is little to colour. Its help line says so.
 
 WHAT CHANGED IN 4.14
   - ENB Auto focus is EscoEditor's own now. Asking ENB to switch NVE to its
@@ -495,7 +509,7 @@ WHAT CHANGED IN 2.9
 
 CHECK YOU HAVE THIS VERSION
   The first line of EscoEditor.log (next to the .asi) must say
-  "EscoEditor 4.14".
+  "EscoEditor 4.15".
 
 INSTALL
   FiveM:          close FiveM, run Install.bat - or copy EscoEditor.asi

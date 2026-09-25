@@ -955,8 +955,9 @@ namespace lightui
 		};
 		const bool autoF = enbdof::s_known[enbdof::I_FOCUS] ? enbdof::s_manual[enbdof::I_FOCUS] < 0.5f : enbdof::techAuto();
 		const int mainOpts[] = { enbdof::I_FOCUS, autoF ? -1 : enbdof::I_DIST, autoF ? enbdof::I_AUTO_APERTURE : enbdof::I_APERTURE,
-								 enbdof::I_NEAR, autoF ? enbdof::I_AUTO_NEARPOWER : enbdof::I_NEARPOWER, 12, 14, 11, 17, 18 };
+								 enbdof::I_NEAR, autoF ? enbdof::I_AUTO_NEARPOWER : enbdof::I_NEARPOWER, 11, 17, 18 };
 		bool isMain[enbdof::N] = {};
+		isMain[12] = isMain[14] = true;     // Blur size and Maximum size follow the Aperture (4.15)
 		for (int i : mainOpts) if (i >= 0) { isMain[i] = true; option(i); }
 		if (ImGui::TreeNode("More ENB options"))
 		{

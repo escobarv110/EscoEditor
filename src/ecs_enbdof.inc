@@ -99,10 +99,22 @@ namespace enbdof
 	enum { V_APERTURE = 100, V_NEAR = 101, V_ANAMORPHIC = 102 };
 	inline bool isVirtual(int p) { return p >= V_APERTURE && p <= V_ANAMORPHIC; }
 	inline float clampf(float v, float lo, float hi) { return v < lo ? lo : v > hi ? hi : v; }
-	// Manual: 100% is NVE's own 0.5 (everything past the focus fully blurred at
-	// once); 50% = 0.0625, full blur at 1.7x the focus distance; 25% at 6x.
-	inline float manualFromPct(float pc) { const float f = clampf(pc, 0.0f, 100.0f) / 100.0f; return 0.5f * f * f * f; }
-	inline float pctManual(float a)      { return 100.0f * cbrtf(clampf(a / 0.5f, 0.0f, 1.0f)); }
+	// Aperture is THE blur amount (4.15): 0% no blur at all, 100% the most NVE
+	// draws. NVE's blur is three numbers together - its aperture (how soon
+	// things go soft past the focus), DOF : Maximum size (the radius the blur
+	// can reach, 2..20) and Blur : Size (a softening pass over it, 0..2) - so
+	// the one percentage sets all three (blurSizesFor), and the menu has no
+	// separate size rows. Stored as NVE's aperture: 0.12 at 100%.
+	constexpr float kApertureFull = 0.12f;
+	inline float manualFromPct(float pc) { return kApertureFull * clampf(pc, 0.0f, 100.0f) / 100.0f; }
+	inline float pctManual(float a)      { return clampf(a / kApertureFull, 0.0f, 1.0f) * 100.0f; }
+	// Maximum size and Blur size for an aperture, as the percentage says.
+	inline void blurSizesFor(float a, float* maxSize, float* blurSize)
+	{
+		const float f = clampf(a / kApertureFull, 0.0f, 1.0f);
+		*maxSize = 2.0f + 18.0f * f;
+		*blurSize = 2.0f * f;
+	}
 	// Auto-focus compares raw depths: its blur also shrinks as the focus moves off.
 	inline float autoFromPct(float pc)   { return clampf(pc, 0.0f, 100.0f) / 10.0f; }
 	inline float pctAuto(float a)        { return clampf(a * 10.0f, 0.0f, 100.0f); }
@@ -466,6 +478,9 @@ namespace enbdof
 			// NVE's ini keeps the two apertures on their own scales (its 0.5 and
 			// 0.5 are "everything blurred" and "almost nothing"); the session
 			// starts with Auto at the same strength as Manual.
+			// 4.15: Aperture is the blur amount; the session starts at 50%.
+			// NVE's own 0.5 would read as 100% - more blur than anyone asked for.
+			if (s_known[I_APERTURE]) s_manual[I_APERTURE] = manualFromPct(50.0f);
 			if (s_known[I_APERTURE] && s_known[I_AUTO_APERTURE]) s_manual[I_AUTO_APERTURE] = autoFromPct(pctManual(s_manual[I_APERTURE]));
 			if (s_known[I_NEARPOWER] && s_known[I_AUTO_NEARPOWER]) s_manual[I_AUTO_NEARPOWER] = s_manual[I_NEARPOWER];
 			readTechnique();
@@ -573,7 +588,7 @@ namespace enbdof
 		const float p = x <= 1.0f ? x * 100.0f : x;
 		return p > 100.0f ? 100.0f : p;
 	}
-	inline float apertureOf(float pct, float strength) { const float f = pct / 100.0f; return 0.5f * f * f * strength; }
+	inline float apertureOf(float pct, float strength) { return manualFromPct(pct * strength); }
 	inline float autoApertureOf(float pct, float strength) { return 2.0f * (pct / 100.0f) * strength; }
 	int s_rawLogs = 0;
 
@@ -616,6 +631,62 @@ namespace enbdof
 	// What ENB should hold at `t` ms into the clip: the session values, then the
 	// options this clip's keyframes set themselves, then the game's own DOF of
 	// the keyframes either side for whatever those did not set.
+	// Is there a Rockstar Editor keyframe at `t` (within 5 ms)?
+	bool markerAt(float t)
+	{
+		void* st = game::replayStorage();
+		if (!st) return false;
+		const int n = st::count(st);
+		if (n <= 0 || n > 4096) return false;
+		for (int i = 0; i < n; ++i)
+		{
+			const void* m = st::tryGet(st, i);
+			if (!m) continue;
+			EdDof d;
+			readDof(m, d);
+			if (d.have && fabsf(d.t - t) <= 5.0f) return true;
+		}
+		return false;
+	}
+
+	// The ENB options keyframe by keyframe (4.15), the way the game's own DOF
+	// goes: each Rockstar Editor keyframe has its own values - the ones set in
+	// its ENB rows, and the defaults for the rest - and the picture blends from
+	// one keyframe to the next. Until 4.15 a value held until another keyframe
+	// changed it, so a blurred keyframe kept blurring the keyframes after it.
+	// Keys the light editor animated at other moments still shape the defaults.
+	uint32_t evalByMarker(const lights::EnbTrack& tr, float t, float* out)
+	{
+		EdDof a, b;
+		if (!dofAround(t, a, b)) return lights::evalEnb(tr, t, out, kinds);   // no keyframes: the keys as they are
+		lights::EnbTrack loose;
+		loose.n = 0;
+		for (int i = 0; i < tr.n; ++i)
+			if (!markerAt(tr.k[i].t)) loose.k[loose.n++] = tr.k[i];
+		uint32_t filled = 0;
+		float va[N], vb[N];
+		memcpy(va, out, sizeof(va));
+		if (loose.n) filled |= lights::evalEnb(loose, a.t, va, kinds);
+		for (int p = 0; p < N; ++p) { float x; if (lights::enbKeyValue(tr, a.t, p, &x)) { va[p] = x; filled |= 1u << p; } }
+		float u = 0.0f;
+		if (b.have && b.t > a.t)
+		{
+			memcpy(vb, out, sizeof(vb));
+			if (loose.n) filled |= lights::evalEnb(loose, b.t, vb, kinds);
+			for (int p = 0; p < N; ++p) { float x; if (lights::enbKeyValue(tr, b.t, p, &x)) { vb[p] = x; filled |= 1u << p; } }
+			u = (t - a.t) / (b.t - a.t);
+			if (!(u >= 0.0f)) u = 0.0f;
+			if (u > 1.0f) u = 1.0f;
+		}
+		for (int p = 0; p < N; ++p)
+		{
+			if (u <= 0.0f || kinds[p] >= 2) { out[p] = va[p]; continue; }   // a switch changes at the keyframe
+			const float x = va[p] + (vb[p] - va[p]) * u;
+			out[p] = kinds[p] == 1 ? floorf(x + 0.5f) : x;
+		}
+		return filled;
+	}
+
 	void computeAt(float t, Want& w)
 	{
 		w.at = GetTickCount64();
@@ -624,7 +695,7 @@ namespace enbdof
 		uint32_t filled = 0;
 		{
 			lights::Lock lk;
-			if (lights::g_cur && lights::g_cur->enb.n > 0) filled = lights::evalEnb(lights::g_cur->enb, t, w.v, kinds);
+			if (lights::g_cur && lights::g_cur->enb.n > 0) filled = evalByMarker(lights::g_cur->enb, t, w.v);
 		}
 		if (g_cfg.enbFollow)
 		{
@@ -686,12 +757,17 @@ namespace enbdof
 			s_autoLogs = 3;
 			logf("enb: Auto focus has nothing measured - it needs ReShade with EscoFlare.fx (its EscoFocus pass). The keyframe's Focus Distance is used meanwhile.");
 		}
+		float sizeMax = 0.0f, sizeBlur = 0.0f;
+		blurSizesFor(w.v[I_APERTURE], &sizeMax, &sizeBlur);
 		for (int i = 0; i < N; ++i)
 		{
 			if (!s_known[i]) continue;
 			// NVE always runs its Manual technique (TECHNIQUE 1); Auto is ours.
+			// Maximum size and Blur size are the Aperture's (4.15).
 			const float out = i == I_FOCUS ? (float)TECH_MANUAL
 							: i == I_MOUSE ? 0.0f
+							: i == 14 ? sizeMax
+							: i == 12 ? sizeBlur
 							: i == I_DIST ? (autoD > 0.0f ? autoD : enbDistance(w.v[i], n))   // metres -> NVE's Distance
 							: w.v[i];
 			if (s_havePushed[i] && same(i, s_pushed[i], out)) continue;
@@ -785,9 +861,7 @@ namespace enbdof
 		if (!autoF) add(I_DIST);
 		if (s_known[I_APERTURE]) add(V_APERTURE);
 		if (s_known[I_NEAR]) add(V_NEAR);
-		add(12);                                          // Blur : Size
-		add(14);                                          // DOF : Maximum size
-		add(11);                                          // Blur : Chromatic Spread
+		add(11);                                          // Blur : Chromatic Spread (the sizes follow Aperture)
 		if (s_known[17] && s_known[18]) add(V_ANAMORPHIC);
 	}
 	int listCount() { return s_listN; }
@@ -924,7 +998,7 @@ namespace enbdof
 		{
 		case V_APERTURE:
 		{
-			const float pc = clampf(cur + 2.0f * (float)delta, 0.0f, 100.0f);
+			const float pc = clampf(floorf(cur + 0.5f) + (float)delta, 0.0f, 100.0f);
 			put(a ? I_AUTO_APERTURE : I_APERTURE, a ? autoFromPct(pc) : manualFromPct(pc));
 			break;
 		}
@@ -1018,7 +1092,7 @@ namespace enbdof
 		switch (p)
 		{
 		case I_FOCUS:           return "Auto: the focus follows what is in the middle of the picture, as the clip plays. Manual: at Focus Distance.";
-		case V_APERTURE:        return "How strong the blur is - how soon things go soft behind and in front of the focus.";
+		case V_APERTURE:        return "How much blur: 0% none at all, 100% the most. Hold left/right to go faster.";
 		case V_NEAR:            return "Blur in front of the focus too: Off, or how much of the blur behind it.";
 		case V_ANAMORPHIC:      return "Oval bokeh, like an anamorphic lens: Off, or how stretched.";
 		case I_DIST:            return centreFresh() ? "Where the picture is sharp, in metres. Enter: focus on what is in the middle of the picture." : "Where the picture is sharp, in metres from the camera.";
@@ -1031,7 +1105,7 @@ namespace enbdof
 		case 8:  return "Makes the auto-focus reach further.";
 		case 9:  return "Where the auto-focus looks, left to right.";
 		case 10: return "Where the auto-focus looks, top to bottom.";
-		case 11: return "Colour fringes in the blur.";
+		case 11: return "Colour fringes at the edges of the blur. They grow with the blur, so they show more at a higher Aperture.";
 		case 12: return "How big the blur is.";
 		case 13: return "More steps, smoother blur, slower.";
 		case 14: return "The largest the blur can get.";
