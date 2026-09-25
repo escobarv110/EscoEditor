@@ -665,19 +665,39 @@ int main(int argc, char** argv)
             for (int i = 0; i < ed::I_SEC_NEAR; ++i) if (ed::isLabel(i)) labels = false;
             CHECK(labels, "the six separator lines are labels, never sent to ENB; the 23 real options are not");
             // the menu list, as ENB's own window has it and no more
+            char fb0[16];
             for (int i = 0; i < ed::N; ++i) ed::s_known[i] = !ed::isLabel(i);
             ed::s_manual[ed::I_FOCUS] = 1.0f; ed::s_manual[ed::I_NEAR] = 1.0f; ed::s_manual[17] = 1.0f;
             ed::buildList();
-            const int wantManual[] = { ed::I_FOCUS, ed::I_DIST, ed::I_APERTURE, ed::I_NEAR, ed::I_NEARPOWER, 12, 14, 11, 17, 18 };
-            bool listOk = ed::listCount() == 10;
-            for (int k = 0; listOk && k < 10; ++k) if (ed::listParam(k) != wantManual[k]) listOk = false;
-            CHECK(listOk && ed::listParam(10) == -1, "Manual: Focus Mode, Focus Distance, Aperture, Near Field Blur / Power, Blur Size, Maximum Size, Chromatic Spread, Anamorphic / Stretch");
+            const int wantManual[] = { ed::I_FOCUS, ed::I_DIST, ed::V_APERTURE, ed::V_NEAR, 12, 14, 11, ed::V_ANAMORPHIC };
+            bool listOk = ed::listCount() == 8;
+            for (int k = 0; listOk && k < 8; ++k) if (ed::listParam(k) != wantManual[k]) listOk = false;
+            CHECK(listOk && ed::listParam(8) == -1, "Manual: Focus Mode, Focus Distance, Aperture, Near Field Blur, Blur Size, Maximum Size, Chromatic Spread, Anamorphic - 8 rows, fits the column");
             ed::s_manual[ed::I_FOCUS] = 0.0f; ed::s_manual[ed::I_NEAR] = 0.0f; ed::s_manual[17] = 0.0f;
             ed::buildList();
-            const int wantAuto[] = { ed::I_FOCUS, ed::I_AUTO_APERTURE, ed::I_NEAR, 12, 14, 11, 17 };
+            const int wantAuto[] = { ed::I_FOCUS, ed::V_APERTURE, ed::V_NEAR, 12, 14, 11, ed::V_ANAMORPHIC };
             bool autoOk = ed::listCount() == 7;
             for (int k = 0; autoOk && k < 7; ++k) if (ed::listParam(k) != wantAuto[k]) autoOk = false;
-            CHECK(autoOk, "Auto: no distance, Auto-focus's own aperture, and a switch that is off hides what hangs on it");
+            CHECK(autoOk, "Auto: the same rows without a distance");
+
+            // one Aperture percentage, converted for whichever technique runs
+            CHECK(fabsf(ed::manualFromPct(100.0f) - 0.5f) < 1e-6f && fabsf(ed::manualFromPct(50.0f) - 0.0625f) < 1e-6f &&
+                  fabsf(ed::pctManual(0.0625f) - 50.0f) < 1e-3f && fabsf(ed::pctManual(2.3f) - 100.0f) < 1e-3f,
+                  "Manual: 100%% is NVE's 0.5, 50%% is 0.0625, and 2.30 (spent long before) reads as 100%%");
+            CHECK(fabsf(ed::autoFromPct(50.0f) - 5.0f) < 1e-6f && fabsf(ed::pctAuto(0.5f) - 5.0f) < 1e-4f,
+                  "Auto: 50%% is 5 on its own scale, and NVE's 0.5 there is only 5%% - the Auto that blurred nothing");
+            ed::s_manual[ed::I_AUTO_APERTURE] = 5.0f;
+            bool own;
+            CHECK(fabsf(ed::valueHere(ed::V_APERTURE, &own) - 50.0f) < 1e-3f, "the Aperture row reads the running technique's own aperture");
+            CHECK(fabsf(ed::powerFromPct(50.0f) - 2.0f) < 1e-6f && fabsf(ed::nearPct(2.0f) - 50.0f) < 1e-4f && ed::nearPct(0.5f) == 100.0f,
+                  "Near Field Blur 50%% is a near field power of 2 (the near blur halved)");
+            CHECK(ed::valueHere(ed::V_NEAR, &own) < 0.0f && !strcmp(ed::format(ed::V_NEAR, -1.0f, fb0, 16), "Off") &&
+                  !strcmp(ed::format(ed::V_NEAR, 30.0f, fb0, 16), "30%") && !strcmp(ed::format(ed::V_ANAMORPHIC, 0.0f, fb0, 16), "Off") &&
+                  !strcmp(ed::format(ed::V_ANAMORPHIC, 1.5f, fb0, 16), "1.50x") && !strcmp(ed::format(ed::V_APERTURE, 42.0f, fb0, 16), "42%"),
+                  "the combined rows read Off or their amount");
+            ed::s_manual[17] = 1.0f; ed::s_manual[18] = 2.0f;
+            CHECK(ed::valueHere(ed::V_ANAMORPHIC, &own) == 2.0f && ed::menuLabel(ed::V_ANAMORPHIC)[0] == 'A' && !ed::reshapes(ed::V_NEAR),
+                  "Anamorphic on reads its stretch; the combined rows do not add or remove rows");
             char fb[16];
             CHECK(!strcmp(ed::format(ed::I_FOCUS, 0.0f, fb, 16), "Auto") && !strcmp(ed::format(ed::I_FOCUS, 1.0f, fb, 16), "Manual") &&
                   ed::stepped(ed::I_FOCUS, 1.0f, 1) == 0.0f && ed::stepped(ed::I_FOCUS, 0.0f, -8) == 1.0f && ed::reshapes(ed::I_FOCUS),

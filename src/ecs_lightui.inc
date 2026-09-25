@@ -31,6 +31,7 @@ namespace lightui
 {
 	bool     g_imgui = false;        // ReShade gave us its ImGui function table
 	bool     g_open  = false;
+	bool     g_ptrLogged = false;   // the pointer has said where it gets the mouse from, this opening
 	bool     g_closeArmed = false;   // the editor's key has been up since it opened
 	bool     g_picking = false;      // the next click in the picture picks what the light follows
 	bool     g_showList = false;     // the scene list is open in the attach section
@@ -1259,8 +1260,8 @@ namespace lightui
 			tip("Makes the light flash - it and its flare:\n"
 				"Blink - on, then off.  Strobe - a short hard flash each beat.  Pulse - fades up and down.\n"
 				"Flicker - a flame or a failing bulb.  Double flash - two quick flashes, then a pause, like an emergency light.\n"
-				"It follows the clip's own clock, so every playback and the export flash on the same frames. "
-				"While the clip is paused and this editor is open the light stays lit, so it can be placed; press play to see it flash.");
+				"While the clip plays - and in the export - it follows the clip's own clock, so every playback flashes on the same frames. "
+				"While the clip is paused it flashes in real time, so you see it as you set it up.");
 			if (fm != lights::FX_OFF)
 			{
 				lights::flashFill(L.fx);
@@ -1440,31 +1441,51 @@ namespace lightui
 		g_listHover = -1;
 		g_drag = 0;
 		g_openLogged = false;
+		g_ptrLogged = false;
 	}
 
 	// reshade_overlay: every frame, on ReShade's render thread.
-	// The mouse, drawn by the editor itself. ReShade only draws ImGui's cursor
-	// while its own menu is open and takes the game's away, so with the light
-	// editor alone there was none. A crosshair: white with a dark edge, so it
-	// shows on a lit wall and in a night sky alike, with a dot at the point
-	// that counts.
-	void drawCrosshair(const ImGuiIO& io)
+	// The mouse pointer, drawn by the editor itself: a white arrow with a black
+	// edge. ReShade draws ImGui's cursor only while its own menu is open, and
+	// the game hides its arrow while the editor holds the mouse. 4.12 drew a
+	// crosshair only where ImGui said the mouse was; if ImGui does not know
+	// (ReShade's input sees another window), it drew nothing. Now the position
+	// comes from Windows when ImGui has none, and the log says which it was.
+	int  g_ptrLogs = 0;
+
+	void drawPointer(reshade::api::effect_runtime* rt, const ImGuiIO& io)
 	{
-		if (!ImGui::IsMousePosValid(&io.MousePos)) return;
-		ImGui::SetMouseCursor(ImGuiMouseCursor_None);    // never two cursors
+		ImVec2 m = io.MousePos;
+		const bool fromImgui = ImGui::IsMousePosValid(&io.MousePos);
+		bool fromOs = false;
+		POINT pt = {};
+		const HWND hw = (HWND)rt->get_hwnd();
+		RECT rc = {};
+		if (hw && GetCursorPos(&pt) && ScreenToClient(hw, &pt) && GetClientRect(hw, &rc) && rc.right > 0 && rc.bottom > 0)
+		{
+			fromOs = true;
+			if (!fromImgui) m = ImVec2(pt.x * io.DisplaySize.x / (float)rc.right, pt.y * io.DisplaySize.y / (float)rc.bottom);
+		}
+		if (!g_ptrLogged && g_ptrLogs < 6)
+		{
+			g_ptrLogged = true;
+			++g_ptrLogs;
+			logf("lights: the editor's pointer - ImGui %s (%.0f, %.0f); Windows %s (%ld, %ld in a %ldx%ld window, ImGui draws %.0fx%.0f); window %s in front",
+				fromImgui ? "knows the mouse at" : "does NOT know where the mouse is", io.MousePos.x, io.MousePos.y,
+				fromOs ? "has it at" : "could not say", (long)pt.x, (long)pt.y, (long)rc.right, (long)rc.bottom,
+				io.DisplaySize.x, io.DisplaySize.y, hw && GetAncestor(hw, GA_ROOT) == GetAncestor(GetForegroundWindow(), GA_ROOT) ? "is" : "is NOT");
+		}
+		if (!fromImgui && !fromOs) return;
 		ImDrawList* dl = ImGui::GetForegroundDrawList();
-		const float k = io.DisplaySize.y > 0.0f ? io.DisplaySize.y / 1080.0f : 1.0f;
-		const ImVec2 m = io.MousePos;
-		const float gap = 3.0f * k, len = 9.0f * k;
-		const ImU32 dark = IM_COL32(0, 0, 0, 200), light = IM_COL32(255, 255, 255, 255);
-		auto arm = [&](float dx, float dy) {
-			const ImVec2 a(m.x + dx * gap, m.y + dy * gap), b(m.x + dx * (gap + len), m.y + dy * (gap + len));
-			dl->AddLine(a, b, dark, 3.5f * k);
-			dl->AddLine(a, b, light, 1.5f * k);
-		};
-		arm(1, 0); arm(-1, 0); arm(0, 1); arm(0, -1);
-		dl->AddCircleFilled(m, 2.2f * k, dark);
-		dl->AddCircleFilled(m, 1.2f * k, light);
+		const float k = (io.DisplaySize.y > 0.0f ? io.DisplaySize.y / 1080.0f : 1.0f) * 1.1f;
+		auto P = [&](float x, float y) { return ImVec2(m.x + x * k, m.y + y * k); };
+		// the classic arrow: a triangle and a tail, white, outlined in black
+		const ImVec2 outline[7] = { P(0, 0), P(0, 16), P(4, 12.3f), P(7, 19), P(9.2f, 18), P(6.2f, 11.3f), P(11.3f, 11.3f) };
+		const ImU32 white = IM_COL32(255, 255, 255, 255), black = IM_COL32(0, 0, 0, 255);
+		dl->AddTriangleFilled(P(0, 0), P(0, 16), P(11.3f, 11.3f), white);
+		const ImVec2 tail[4] = { P(4, 12.3f), P(7, 19), P(9.2f, 18), P(6.2f, 11.3f) };
+		dl->AddConvexPolyFilled(tail, 4, white);
+		dl->AddPolyline(outline, 7, black, ImDrawFlags_Closed, 1.3f * k);
 	}
 
 	void onOverlay(reshade::api::effect_runtime* rt)
@@ -1618,7 +1639,7 @@ namespace lightui
 			}
 		}
 		lights::g_uiOpen = g_open;
-		if (g_open) drawCrosshair(io);
+		if (g_open) drawPointer(rt, io);
 		if (!g_open) closeState();
 	}
 

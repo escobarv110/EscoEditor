@@ -89,6 +89,27 @@ namespace enbdof
 	       I_FOCUS = 29 };
 	inline bool isLabel(int i) { return i >= I_SEC_NEAR && i <= I_SEC_MISC; }
 
+	// Three rows stand for more than one ENB option each (4.13):
+	//   Aperture         a percentage. NVE's two techniques read two different
+	//                    apertures on two different scales - Manual's is spent
+	//                    by about 0.1, Auto-focus's wants 2 to 10 - so the same
+	//                    percentage is converted for whichever runs.
+	//   Near Field Blur  Off, or how much: the near field switch and its power.
+	//   Anamorphic       Off, or how stretched: the switch and the stretch.
+	enum { V_APERTURE = 100, V_NEAR = 101, V_ANAMORPHIC = 102 };
+	inline bool isVirtual(int p) { return p >= V_APERTURE && p <= V_ANAMORPHIC; }
+	inline float clampf(float v, float lo, float hi) { return v < lo ? lo : v > hi ? hi : v; }
+	// Manual: 100% is NVE's own 0.5 (everything past the focus fully blurred at
+	// once); 50% = 0.0625, full blur at 1.7x the focus distance; 25% at 6x.
+	inline float manualFromPct(float pc) { const float f = clampf(pc, 0.0f, 100.0f) / 100.0f; return 0.5f * f * f * f; }
+	inline float pctManual(float a)      { return 100.0f * cbrtf(clampf(a / 0.5f, 0.0f, 1.0f)); }
+	// Auto-focus compares raw depths: its blur also shrinks as the focus moves off.
+	inline float autoFromPct(float pc)   { return clampf(pc, 0.0f, 100.0f) / 10.0f; }
+	inline float pctAuto(float a)        { return clampf(a * 10.0f, 0.0f, 100.0f); }
+	// The near field power divides the near blur: 100% = as much as behind.
+	inline float powerFromPct(float pc)  { return 100.0f / clampf(pc, 1.0f, 100.0f); }
+	inline float nearPct(float power)    { return power <= 1.0f ? 100.0f : clampf(100.0f / power, 1.0f, 100.0f); }
+
 	// NVE's two techniques. "Gameplay DOF Manual" focuses at Manual Focus :
 	// Distance; "Gameplay DOF Auto-focus" measures the depth at its point of
 	// interest itself. Each reads its own aperture and near field power.
@@ -407,6 +428,11 @@ namespace enbdof
 				s_havePushed[i] = false;
 			}
 			s_manual[I_DIST] = metresOf(s_base[I_DIST], nearClip());
+			// NVE's ini keeps the two apertures on their own scales (its 0.5 and
+			// 0.5 are "everything blurred" and "almost nothing"); the session
+			// starts with Auto at the same strength as Manual.
+			if (s_known[I_APERTURE] && s_known[I_AUTO_APERTURE]) s_manual[I_AUTO_APERTURE] = autoFromPct(pctManual(s_manual[I_APERTURE]));
+			if (s_known[I_NEARPOWER] && s_known[I_AUTO_NEARPOWER]) s_manual[I_AUTO_NEARPOWER] = s_manual[I_NEARPOWER];
 			readTechnique();
 			if (!s_known[I_FOCUS])
 			{
@@ -575,6 +601,9 @@ namespace enbdof
 
 	void compute(Want& w) { computeAt(game::replayTimeMs(), w); }
 
+	ULONGLONG s_nextVerify = 0;
+	int s_resetLogs = 0;
+
 	void push()
 	{
 		if (!s_ready) return;
@@ -585,6 +614,22 @@ namespace enbdof
 			if (s_dirty) restoreBase();
 			return;
 		}
+		// ENB can put its own values back behind our back - a technique switch
+		// reloads the shader - and a value only goes in when it changes, so
+		// once a second what ENB holds is compared with what was sent.
+		const ULONGLONG nowTick = GetTickCount64();
+		if (nowTick >= s_nextVerify)
+		{
+			s_nextVerify = nowTick + 1000;
+			for (int i = 0; i < N; ++i)
+			{
+				if (!s_known[i] || !s_havePushed[i]) continue;
+				float back;
+				if (!readValue(s_file, s_cat, i, &back) || same(i, back, s_pushed[i])) continue;
+				s_havePushed[i] = false;
+				if (s_resetLogs < 6) { ++s_resetLogs; logf("enb: ENB had \"%s\" back at %.3f (not %.3f) - sent again", kDefs[i].label, back, s_pushed[i]); }
+			}
+		}
 		const float n = nearClip();
 		for (int i = 0; i < N; ++i)
 		{
@@ -593,6 +638,8 @@ namespace enbdof
 			if (s_havePushed[i] && same(i, s_pushed[i], out)) continue;
 			if (writeValue(i, out))
 			{
+				if (i == I_FOCUS && s_havePushed[i])
+					for (int j = 0; j < N; ++j) if (j != I_FOCUS) s_havePushed[j] = false;   // the other technique: all of it again
 				s_pushed[i] = out;
 				s_havePushed[i] = true;
 				s_dirty = true;
@@ -672,31 +719,31 @@ namespace enbdof
 
 	void buildList()
 	{
-		bool own;
 		const bool autoF = focusAutoHere();
 		s_listN = 0;
-		auto add = [&](int p) { if (s_known[p] && s_listN < 16) s_list[s_listN++] = p; };
+		auto add = [&](int p) { if ((isVirtual(p) || s_known[p]) && s_listN < 16) s_list[s_listN++] = p; };
 		add(I_FOCUS);
 		if (!autoF) add(I_DIST);
-		add(autoF ? I_AUTO_APERTURE : I_APERTURE);
-		add(I_NEAR);
-		if (valueHere(I_NEAR, &own) > 0.5f) add(autoF ? I_AUTO_NEARPOWER : I_NEARPOWER);
+		if (s_known[autoF ? I_AUTO_APERTURE : I_APERTURE]) add(V_APERTURE);
+		if (s_known[I_NEAR]) add(V_NEAR);
 		add(12);                                          // Blur : Size
 		add(14);                                          // DOF : Maximum size
 		add(11);                                          // Blur : Chromatic Spread
-		add(17);                                          // DOF : Anamorphic enable
-		if (valueHere(17, &own) > 0.5f) add(18);          // DOF : Anamorphic stretch
+		if (s_known[17] && s_known[18]) add(V_ANAMORPHIC);
 	}
 	int listCount() { return s_listN; }
 	int listParam(int k) { return (k >= 0 && k < s_listN) ? s_list[k] : -1; }
 	// Changing these adds or removes rows.
-	bool reshapes(int p) { return p == I_FOCUS || p == I_NEAR || p == 17; }
+	bool reshapes(int p) { return p == I_FOCUS; }
 
 	const char* menuLabel(int p)
 	{
 		switch (p)
 		{
 		case I_FOCUS:           return "Focus Mode";
+		case V_APERTURE:        return "Aperture";
+		case V_NEAR:            return "Near Field Blur";
+		case V_ANAMORPHIC:      return "Anamorphic";
 		case I_DIST:            return "Focus Distance";
 		case I_APERTURE:
 		case I_AUTO_APERTURE:   return "Aperture";
@@ -728,10 +775,44 @@ namespace enbdof
 		return isfinite(*t);
 	}
 
+	float valueHere(int p, bool* own);
+
+	// A virtual row's value: Aperture 0..100 (%), Near Field Blur -1 (Off) or
+	// 1..100 (%), Anamorphic 0 (Off) or its stretch.
+	float virtualHere(int p, bool* own)
+	{
+		bool o1 = false, o2 = false;
+		const bool a = focusAutoHere();
+		float r = 0.0f;
+		switch (p)
+		{
+		case V_APERTURE:
+			r = a ? pctAuto(valueHere(I_AUTO_APERTURE, &o1)) : pctManual(valueHere(I_APERTURE, &o1));
+			break;
+		case V_NEAR:
+		{
+			const float on = valueHere(I_NEAR, &o1);
+			const float pw = valueHere(a ? I_AUTO_NEARPOWER : I_NEARPOWER, &o2);
+			r = on > 0.5f ? nearPct(pw) : -1.0f;
+			break;
+		}
+		case V_ANAMORPHIC:
+		{
+			const float on = valueHere(17, &o1);
+			const float st = valueHere(18, &o2);
+			r = on > 0.5f ? (st > 0.05f ? st : 0.05f) : 0.0f;
+			break;
+		}
+		}
+		*own = o1 || o2;
+		return r;
+	}
+
 	// This keyframe's value of option p, and whether it is its own.
 	float valueHere(int p, bool* own)
 	{
 		*own = false;
+		if (isVirtual(p)) return virtualHere(p, own);
 		float t;
 		if (p < 0 || p >= N || !markerTimeNow(&t)) return p >= 0 && p < N ? s_manual[p] : 0.0f;
 		{
@@ -769,29 +850,98 @@ namespace enbdof
 	void stepHere(int p, int delta)
 	{
 		float t;
-		if (p < 0 || p >= N || !markerTimeNow(&t)) return;
-		bool own;
-		const float nv = stepped(p, valueHere(p, &own), delta);
+		if (!markerTimeNow(&t) || !(isVirtual(p) || (p >= 0 && p < N))) return;
+		lights::Lock lk;                     // re-entrant: the reads below take it too
+		if (!lights::g_cur) return;
+		lights::EnbTrack& tr = lights::g_cur->enb;
 		Want w;
 		computeAt(t, w);                     // what the keyframe showed: the seed of a new key
-		lights::Lock lk;
-		if (!lights::g_cur) return;
-		if (lights::setEnbParam(lights::g_cur->enb, t, p, nv, w.v)) lights::markDirty();
+		bool own;
+		const bool a = focusAutoHere();
+		const float cur = valueHere(p, &own);
+		bool ch = false;
+		auto put = [&](int q, float v) { if (lights::setEnbParam(tr, t, q, v, w.v)) ch = true; };
+		switch (p)
+		{
+		case V_APERTURE:
+		{
+			const float pc = clampf(cur + 2.0f * (float)delta, 0.0f, 100.0f);
+			put(a ? I_AUTO_APERTURE : I_APERTURE, a ? autoFromPct(pc) : manualFromPct(pc));
+			break;
+		}
+		case V_NEAR:
+		{
+			if (cur < 0.0f)                                   // Off
+			{
+				if (delta > 0) { put(I_NEAR, 1.0f); put(a ? I_AUTO_NEARPOWER : I_NEARPOWER, powerFromPct(10.0f)); }
+				break;
+			}
+			const float pc = cur + 5.0f * (float)delta;
+			if (pc < 1.0f) { put(I_NEAR, 0.0f); break; }
+			put(I_NEAR, 1.0f);
+			put(a ? I_AUTO_NEARPOWER : I_NEARPOWER, powerFromPct(pc > 100.0f ? 100.0f : pc));
+			break;
+		}
+		case V_ANAMORPHIC:
+		{
+			if (cur <= 0.0f)                                  // Off
+			{
+				if (delta > 0) { bool o; const float st = valueHere(18, &o); put(17, 1.0f); put(18, st >= 1.0f ? st : 1.5f); }
+				break;
+			}
+			const float st = floorf((cur + 0.1f * (float)delta) * 100.0f + 0.5f) / 100.0f;
+			if (st < 1.0f) { put(17, 0.0f); break; }
+			put(17, 1.0f);
+			put(18, st > 4.0f ? 4.0f : st);
+			break;
+		}
+		case I_FOCUS:
+		{
+			// The blur keeps its strength across the switch: the other
+			// technique's aperture and near field get the same percentages.
+			bool o;
+			const float pc = valueHere(V_APERTURE, &o), nr = valueHere(V_NEAR, &o);
+			const float nv = stepped(p, cur, delta);
+			put(I_FOCUS, nv);
+			const bool na = nv < 0.5f;
+			if (na != a)
+			{
+				put(na ? I_AUTO_APERTURE : I_APERTURE, na ? autoFromPct(pc) : manualFromPct(pc));
+				if (nr > 0.0f) put(na ? I_AUTO_NEARPOWER : I_NEARPOWER, powerFromPct(nr));
+			}
+			break;
+		}
+		default:
+			put(p, stepped(p, cur, delta));
+			break;
+		}
+		if (ch) lights::markDirty();
 	}
 
 	// Enter on an option row: back to the keyframes around it.
 	void clearHere(int p)
 	{
 		float t;
-		if (p < 0 || p >= N || !markerTimeNow(&t)) return;
+		if (!markerTimeNow(&t)) return;
 		lights::Lock lk;
 		if (!lights::g_cur) return;
-		lights::clearEnbParam(lights::g_cur->enb, t, p);
+		auto clr = [&](int q) { lights::clearEnbParam(lights::g_cur->enb, t, q); };
+		switch (p)
+		{
+		case V_APERTURE:   clr(I_APERTURE); clr(I_AUTO_APERTURE); break;
+		case V_NEAR:       clr(I_NEAR); clr(I_NEARPOWER); clr(I_AUTO_NEARPOWER); break;
+		case V_ANAMORPHIC: clr(17); clr(18); break;
+		default:           if (p >= 0 && p < N) clr(p); else return; break;
+		}
 		lights::markDirty();
 	}
 
 	const char* format(int p, float v, char* buf, int cap)
 	{
+		if (p == V_APERTURE) { snprintf(buf, cap, "%.0f%%", v); return buf; }
+		if (p == V_NEAR) { if (v < 0.0f) return "Off"; snprintf(buf, cap, "%.0f%%", v); return buf; }
+		if (p == V_ANAMORPHIC) { if (v <= 0.0f) return "Off"; snprintf(buf, cap, "%.2fx", v); return buf; }
+		if (p < 0 || p >= N) return "";
 		const Def& d = kDefs[p];
 		if (p == I_FOCUS) return v > 0.5f ? "Manual" : "Auto";
 		if (d.kind == K_BOOL) return v > 0.5f ? "On" : "Off";
@@ -807,6 +957,9 @@ namespace enbdof
 		switch (p)
 		{
 		case I_FOCUS:           return "Auto: ENB focuses on what is in the middle of the picture. Manual: at Focus Distance.";
+		case V_APERTURE:        return "How strong the blur is - how soon things go soft behind and in front of the focus.";
+		case V_NEAR:            return "Blur in front of the focus too: Off, or how much of the blur behind it.";
+		case V_ANAMORPHIC:      return "Oval bokeh, like an anamorphic lens: Off, or how stretched.";
 		case I_DIST:            return "Where the picture is sharp, in metres from the camera.";
 		case I_APERTURE:        return "How fast the blur comes in past the focus. Small numbers: gentle.";
 		case I_AUTO_APERTURE:   return "How strong the blur is.";

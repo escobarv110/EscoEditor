@@ -1653,19 +1653,20 @@ namespace lights
 	// an export needs, where the director tick is not guaranteed to come round
 	// between the frames being encoded. `fs` may be null: the flares need a
 	// camera, and an export has no ReShade pass to draw them in.
-	// The clip's clock stands still while it is paused. Then, with the light
-	// editor open, a flashing light is shown lit, so it can be placed and seen
-	// - it flashes again as soon as the clip plays, and always in an export.
+	// While the clip plays - and in an export - a light flashes on the clip's
+	// own clock, so every playback flashes on the same frames. While it is
+	// paused that clock stands still, and 4.12 froze the flash on whatever
+	// moment the playhead sat: a Pulse paused at the top of a beat was dark,
+	// and the light simply went out. Paused, it flashes on the real clock.
 	volatile float     g_flashLastNow = -1.0f;
 	volatile ULONGLONG g_flashMovedAt = 0;
 
 	void buildDraw(const Ctx& c, Draw& d, FlareSet* fs)
 	{
-		{
-			const ULONGLONG now = GetTickCount64();
-			if (c.now != g_flashLastNow) { g_flashLastNow = c.now; g_flashMovedAt = now; }
-		}
-		const bool holdFlash = g_uiOpen && GetTickCount64() - g_flashMovedAt > 300;
+		const ULONGLONG tick = GetTickCount64();
+		if (c.now != g_flashLastNow) { g_flashLastNow = c.now; g_flashMovedAt = tick; }
+		const bool paused = tick - g_flashMovedAt > 300;
+		const float flashSec = paused ? (float)(tick % 3600000ULL) * 0.001f : c.now * 0.001f;
 		d.count = 0;
 		d.at = GetTickCount64();
 		if (fs)
@@ -1695,9 +1696,9 @@ namespace lights
 				if (!L.parentOk) InterlockedIncrement(&g_heldCount);
 				p = toWorld(L.parent, p);
 			}
-			if (L.fx.mode > 0.5f && !holdFlash)
+			if (L.fx.mode > 0.5f)
 			{
-				const float k = flashLevel(L.fx, c.now * 0.001f, L.id);
+				const float k = flashLevel(L.fx, flashSec, L.id);
 				if (k <= 0.002f) continue;               // dark this frame: nothing to hand the game
 				p.intensity *= k;
 				p.volInt *= k;

@@ -1,4 +1,4 @@
-EscoEditor.asi 4.12  -  more control for the Rockstar Editor
+EscoEditor.asi 4.13  -  more control for the Rockstar Editor
 ======================================================================
 (formerly EditorCamSpeed.asi - same plugin, new name)
 
@@ -9,6 +9,29 @@ menu, adds scene lights you place in the picture with a 3D gizmo - fixed in
 the world, on the camera, or riding along with a ped, a vehicle or a prop -
 and keeps the free camera speed keys. The editor's own camera path,
 transitions, shake and depth of field are never touched.
+
+WHAT CHANGED IN 4.13
+  - ENB Auto focus blurs. NVE's Auto-focus technique reads its own aperture
+    on a scale about twenty times its Manual one: at the ini's 0.5 it hardly
+    blurs at all. Aperture is a percentage now, the same strength in Auto and
+    Manual, converted for whichever runs (Manual: 100% is NVE's 0.5, 50% is
+    0.0625; Auto: 50% is 5). Switching a keyframe's Focus Mode keeps its
+    strength.
+  - ENB Manual options that seemed to do nothing: Manual's aperture is spent
+    by about 0.1 - above that everything past the focus is already fully
+    blurred - so 0.5, 1.55 and 2.30 all looked the same. The percentage puts
+    the whole row where it shows. And ENB can quietly put its own values back
+    (switching technique reloads its shader): once a second EscoEditor checks
+    what ENB holds and sends its values again, and says so in the log.
+  - Fewer, clearer ENB rows: Near Field Blur is Off or a percentage (one row,
+    was two), Anamorphic is Off or its stretch (one row, was two).
+  - Flash runs in real time while the clip is paused, so it shows in the
+    light editor as you set it. 4.12 froze it on the paused moment, which for
+    a Pulse at the start of a beat meant the light went out when the editor
+    closed. Playing and exporting still follow the clip's clock.
+  - The light editor's pointer is a white arrow now, and it is drawn even
+    when ReShade's ImGui does not know where the mouse is (the position then
+    comes from Windows). The log's "the editor's pointer" line says which.
 
 WHAT CHANGED IN 4.12
   - Lights can flash. The light editor's new Flash section: Blink, Strobe,
@@ -455,7 +478,7 @@ WHAT CHANGED IN 2.9
 
 CHECK YOU HAVE THIS VERSION
   The first line of EscoEditor.log (next to the .asi) must say
-  "EscoEditor 4.12".
+  "EscoEditor 4.13".
 
 INSTALL
   FiveM:          close FiveM, run Install.bat - or copy EscoEditor.asi
