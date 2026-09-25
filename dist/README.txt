@@ -1,4 +1,4 @@
-EscoEditor.asi 4.8  -  more control for the Rockstar Editor
+EscoEditor.asi 4.9  -  more control for the Rockstar Editor
 ======================================================================
 (formerly EditorCamSpeed.asi - same plugin, new name)
 
@@ -9,6 +9,19 @@ menu, adds scene lights you place in the picture with a 3D gizmo - fixed in
 the world, on the camera, or riding along with a ped, a vehicle or a prop -
 and keeps the free camera speed keys. The editor's own camera path,
 transitions, shake and depth of field are never touched.
+
+WHAT CHANGED IN 4.9
+  - The ENB option now switches NVE's depth of field ON. Six lines of
+    enbdepthoffield.fx that look like separators in ENB's window - "Manual
+    DOF", "Auto-focus DOF", "DOF Near Field settings", "Blur Settings",
+    "Quality Settings", "Misc. settings" - are switches, and Manual DOF and
+    Auto-focus DOF were both off, so the shader ran no focus mode and nothing
+    blurred. The keyframe's own focus mode now sets them: manual focus runs
+    Manual DOF, auto or target focus runs Auto-focus DOF, None runs neither.
+    A keyframe can set any of the six itself (the new Modes page, and the
+    section switch at the end of Blur, Near field, Quality and Lens).
+  - The first few pushes of the focus, aperture and modes are read back from
+    ENB and logged as "taken" or "NOT TAKEN".
 
 WHAT CHANGED IN 4.8
   - ENB is found. 4.7 walked the game's module list for it but gave up after
@@ -383,7 +396,7 @@ WHAT CHANGED IN 2.9
 
 CHECK YOU HAVE THIS VERSION
   The first line of EscoEditor.log (next to the .asi) must say
-  "EscoEditor 4.8".
+  "EscoEditor 4.9".
 
 INSTALL
   FiveM:          close FiveM, run Install.bat - or copy EscoEditor.asi

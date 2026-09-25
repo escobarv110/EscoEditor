@@ -150,7 +150,7 @@ namespace lights
 	// Every option of ENB's depth of field, keyed over the clip for the ENB
 	// option (ecs_enbdof.inc). Floats interpolate, whole numbers round, the
 	// switches change at the key.
-	constexpr int kEnbParams = 23, kMaxEnbKeys = 16;
+	constexpr int kEnbParams = 29, kMaxEnbKeys = 16;
 	struct EnbKey { float t; uint32_t set; float v[kEnbParams]; };   // `set`: bit i = this key sets option i
 	struct EnbTrack { int n; EnbKey k[kMaxEnbKeys]; };
 
@@ -1939,15 +1939,32 @@ namespace lights
 			}
 			if (!strncmp(s, "e ", 2))
 			{
-				float g[2 + kEnbParams] = {};
-				const int got = set ? parseSome(s + 2, g, 2 + kEnbParams) : 0;
-				if (got == 2 + kEnbParams)                       // 4.7: time, which options, values
+				// 4.9: time, which options (an integer: 29 bits do not fit a
+				// float exactly), 29 values. 4.7: time, mask, 23 values. 4.6:
+				// time and 23 values, every one of them set. The six options
+				// added in 4.9 come after the first 23, so older keys keep their
+				// meaning and simply do not set the new ones.
+				double g[2 + kEnbParams + 2] = {};
+				int got = 0;
+				for (const char* q = s + 2; set && got < 2 + kEnbParams + 2; ++got)
 				{
-					const int at = addEnbKey(set->enb, g[0], g + 2);
-					if (at >= 0) set->enb.k[at].set = (uint32_t)g[1] & kEnbAll;
+					char* end = nullptr;
+					g[got] = strtod(q, &end);
+					if (end == q) break;
+					q = end;
 				}
-				else if (got == 1 + kEnbParams)                  // 4.6: time and every option
-					addEnbKey(set->enb, g[0], g + 1);
+				float v[kEnbParams] = {};
+				uint32_t mask = 0;
+				int from = 0;
+				if (got == 2 + kEnbParams)      { mask = (uint32_t)g[1] & kEnbAll;           from = 2; }
+				else if (got == 2 + 23)         { mask = (uint32_t)g[1] & ((1u << 23) - 1u); from = 2; }
+				else if (got == 1 + 23)         { mask = (1u << 23) - 1u;                     from = 1; }
+				if (from)
+				{
+					for (int q2 = 0; q2 < kEnbParams && from + q2 < got; ++q2) v[q2] = (float)g[from + q2];
+					const int at = addEnbKey(set->enb, (float)g[0], v);
+					if (at >= 0) set->enb.k[at].set = mask;
+				}
 				continue;
 			}
 			if (!strncmp(s, "t ", 2))

@@ -66,8 +66,17 @@ namespace enbdof
 		{ "--> Lens Distortion : Distortion Amount",    K_FLOAT, -1.0f,    1.0f, "Lens distortion" },
 		{ "--> Lens Distortion : Always zoomed",        K_BOOL,   0.0f,    1.0f, "Distortion: always zoomed" },
 		{ "--> Lens Distortion : Zoom Amount",          K_FLOAT,  0.0f,    1.0f, "Distortion: zoom" },
+		// These six look like separators in ENB's window and are switches: with
+		// Manual DOF and Auto-focus DOF both off, NVE's shader runs no focus mode.
+		{ "-------------------------- DOF Near Field settings ------------", K_BOOL, 0.0f, 1.0f, "Near field section" },
+		{ "-------------------------- Manual DOF -------------------------", K_BOOL, 0.0f, 1.0f, "Manual DOF" },
+		{ "-------------------------- Auto-focus DOF ---------------------", K_BOOL, 0.0f, 1.0f, "Auto-focus DOF" },
+		{ "-------------------------- Blur Settings ----------------------", K_BOOL, 0.0f, 1.0f, "Blur section" },
+		{ "-------------------------- Quality Settings -------------------", K_BOOL, 0.0f, 1.0f, "Quality section" },
+		{ "-------------------------- Misc. settings ---------------------", K_BOOL, 0.0f, 1.0f, "Misc section" },
 	};
-	enum { I_NEAR = 1, I_DIST = 3, I_APERTURE = 4, I_AUTO_APERTURE = 6 };
+	enum { I_NEAR = 1, I_DIST = 3, I_APERTURE = 4, I_AUTO_APERTURE = 6,
+	       I_SEC_NEAR = 23, I_SEC_MANUAL = 24, I_SEC_AUTO = 25, I_SEC_BLUR = 26, I_SEC_QUALITY = 27, I_SEC_MISC = 28 };
 
 	uint8_t kinds[N] = {};                // for lights::evalEnb, filled on start
 
@@ -83,7 +92,7 @@ namespace enbdof
 	bool  s_havePushed[N] = {};
 	bool  s_dirty = false;                // something of ours is in ENB now
 	volatile LONGLONG s_lastCb = 0;       // when ENB last called us
-	int   s_cbLogs = 0, s_setFails = 0;
+	int   s_cbLogs = 0, s_setFails = 0, s_checkLogs = 0;
 	int   s_saveCalls = 0;
 	ULONGLONG s_saveWindow = 0;
 	bool  s_saveIsNoise = false;
@@ -415,11 +424,17 @@ namespace enbdof
 		const bool ownDist = (filled & (1u << I_DIST)) != 0;
 		const bool ownAp   = (filled & (1u << I_APERTURE)) != 0;
 		const bool ownAuto = (filled & (1u << I_AUTO_APERTURE)) != 0;
+		const bool ownMan  = (filled & (1u << I_SEC_MANUAL)) != 0;
+		const bool ownAF   = (filled & (1u << I_SEC_AUTO)) != 0;
+		// Which of NVE's focus modes runs: manual focus runs Manual DOF, auto or
+		// target focus runs Auto-focus DOF, None runs neither.
+		auto modes = [&](bool man, bool af) { if (!ownMan) v[I_SEC_MANUAL] = man ? 1.0f : 0.0f; if (!ownAF) v[I_SEC_AUTO] = af ? 1.0f : 0.0f; };
 		if (s_rawLogs < 1 && a.have) { ++s_rawLogs; logf("enb: the keyframe's stored DOF intensity reads %.3f (mode %s)", a.intensity, dof::modeName(a.mode)); }
 		if (a.mode == dof::MODE_NONE)
 		{
 			if (!ownAp) v[I_APERTURE] = 0.0f;
 			if (!ownAuto) v[I_AUTO_APERTURE] = 0.0f;
+			modes(false, false);
 			if (line) snprintf(line, cap, "keyframe DOF None - no blur");
 			return;
 		}
@@ -437,6 +452,7 @@ namespace enbdof
 		const float inten = ia + (ib - ia) * u;
 		if (!ownAp) v[I_APERTURE] = inten * scale;
 		if (!ownAuto) v[I_AUTO_APERTURE] = inten * scale;
+		modes(a.focus == dof::FOCUS_MANUAL, a.focus != dof::FOCUS_MANUAL);
 		if (a.focus == dof::FOCUS_MANUAL)
 		{
 			const bool blendDist = blend && b.focus == dof::FOCUS_MANUAL;
@@ -494,7 +510,22 @@ namespace enbdof
 		{
 			if (!s_known[i]) continue;
 			if (s_havePushed[i] && same(i, s_pushed[i], w.v[i])) continue;
-			if (writeValue(i, w.v[i])) { s_pushed[i] = w.v[i]; s_havePushed[i] = true; s_dirty = true; }
+			if (writeValue(i, w.v[i]))
+			{
+				s_pushed[i] = w.v[i];
+				s_havePushed[i] = true;
+				s_dirty = true;
+				// The first few pushes of what matters are asked back, so the log
+				// shows plainly whether ENB's shader took them.
+				if ((i == I_DIST || i == I_APERTURE || i == I_SEC_MANUAL || i == I_SEC_AUTO) && s_checkLogs < 8)
+				{
+					++s_checkLogs;
+					float back = -12345.0f;
+					const bool read = readValue(s_file, s_cat, i, &back);
+					logf("enb: \"%s\" set to %.3f - ENB reports %s%.3f%s", kDefs[i].label, w.v[i],
+						read ? "" : "(could not read back) ", back, read && same(i, back, w.v[i]) ? ", taken" : ", NOT TAKEN");
+				}
+			}
 			else if (s_setFails++ < 3) logf("enb: ENB would not take \"%s\"", kDefs[i].ui);
 		}
 	}
@@ -539,18 +570,20 @@ namespace enbdof
 	//  an "ENB Options" row picks the page, and at most five rows follow.
 	struct Page { const char* name; int n; int p[5]; };
 	const Page kPages[] = {
-		{ "Focus",      3, { I_DIST, I_APERTURE, 0 } },
-		{ "Blur",       3, { 12, 11, 13 } },
-		{ "Near field", 3, { 1, 2, 5 } },
+		{ "Focus",      2, { I_DIST, I_APERTURE } },
+		{ "Modes",      3, { I_SEC_MANUAL, I_SEC_AUTO, 0 } },
+		{ "Blur",       4, { 12, 11, 13, I_SEC_BLUR } },
+		{ "Near field", 4, { I_SEC_NEAR, 1, 2, 5 } },
 		{ "Anamorphic", 2, { 17, 18 } },
-		{ "Quality",    4, { 14, 15, 16, 19 } },
+		{ "Quality",    5, { 14, 15, 16, 19, I_SEC_QUALITY } },
 		{ "Auto-focus", 5, { 6, 7, 8, 9, 10 } },
-		{ "Lens",       3, { 20, 21, 22 } } };
+		{ "Lens",       4, { I_SEC_MISC, 20, 21, 22 } } };
 	constexpr int kPageCount = (int)(sizeof(kPages) / sizeof(kPages[0]));
 	// One press of left or right. The focus distance moves by 15% a press, so
 	// it covers a metre and a hundred metres alike.
 	const float kStep[N] = { 1.0f, 1.0f, 0.25f, 0.0f, 0.05f, 0.1f, 0.05f, 0.25f, 0.1f, 0.01f, 0.01f,
-							 0.1f, 0.1f, 1.0f, 1.0f, 0.1f, 0.1f, 1.0f, 0.1f, 0.1f, 0.02f, 1.0f, 0.02f };
+							 0.1f, 0.1f, 1.0f, 1.0f, 0.1f, 0.1f, 1.0f, 0.1f, 0.1f, 0.02f, 1.0f, 0.02f,
+							 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
 	int g_page = 0;
 
 	int pageRows()        { return kPages[g_page].n; }

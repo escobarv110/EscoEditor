@@ -635,6 +635,48 @@ int main(int argc, char** argv)
         lights::evalEnb(tr, 1000.0f, out, ed::kinds);
         CHECK(out[17] == 0.0f, "at the next key the switch changes");
 
+        // NVE's section switches: exact names, and the keyframe's focus mode runs them
+        {
+            CHECK(!strcmp(ed::kDefs[ed::I_SEC_MANUAL].ui, "-------------------------- Manual DOF -------------------------") &&
+                  !strcmp(ed::kDefs[ed::I_SEC_AUTO].ui, "-------------------------- Auto-focus DOF ---------------------"),
+                  "the Manual DOF and Auto-focus DOF switches carry ENB's exact names, dashes and all");
+            ed::EdDof m = {};
+            m.have = true; m.mode = dof::MODE_CUSTOM; m.focus = dof::FOCUS_MANUAL; m.dist = 5.0f; m.intensity = 4.0f;
+            float sw[ed::N] = {};
+            ed::applyEditor(m, m, 0.0f, 0.25f, sw, nullptr, 0);
+            CHECK(sw[ed::I_SEC_MANUAL] == 1.0f && sw[ed::I_SEC_AUTO] == 0.0f, "manual focus runs NVE's Manual DOF, not its auto-focus");
+            ed::EdDof au = m;
+            au.focus = dof::FOCUS_AUTO;
+            ed::applyEditor(au, au, 0.0f, 0.25f, sw, nullptr, 0);
+            CHECK(sw[ed::I_SEC_MANUAL] == 0.0f && sw[ed::I_SEC_AUTO] == 1.0f, "auto focus runs Auto-focus DOF");
+            ed::EdDof off = m;
+            off.mode = dof::MODE_NONE;
+            ed::applyEditor(off, off, 0.0f, 0.25f, sw, nullptr, 0);
+            CHECK(sw[ed::I_SEC_MANUAL] == 0.0f && sw[ed::I_SEC_AUTO] == 0.0f, "None runs neither");
+            float mine[ed::N] = {};
+            mine[ed::I_SEC_AUTO] = 1.0f;
+            ed::applyEditor(m, m, 0.0f, 0.25f, mine, nullptr, 0, 1u << ed::I_SEC_AUTO);
+            CHECK(mine[ed::I_SEC_AUTO] == 1.0f && mine[ed::I_SEC_MANUAL] == 1.0f, "a switch the keyframe set itself is left alone");
+
+            // a 4.9 key: 29 options, and a mask above 2^24 that a float could not hold
+            namespace lt = lights;
+            lt::Lock lk;
+            lt::clearStore();
+            lt::LightSet* ks = lt::findSet("Sec", 0, true);
+            float vals[ed::N] = {};
+            vals[ed::I_SEC_MISC] = 1.0f;
+            lt::setEnbParam(ks->enb, 0.0f, ed::I_SEC_MISC, 1.0f, vals);
+            ks->enb.k[0].set |= (1u << 28) | (1u << 1);
+            const uint32_t want = ks->enb.k[0].set;
+            const std::string txt = lt::serialize();
+            lt::clearStore();
+            lt::parse(txt);
+            lt::LightSet* kb = lt::findSet("Sec", 0, false);
+            CHECK(kb && kb->enb.n == 1 && kb->enb.k[0].set == want && kb->enb.k[0].v[ed::I_SEC_MISC] == 1.0f,
+                  "a key setting option 28 reads back with its mask exact (0x%X)", kb ? kb->enb.k[0].set : 0u);
+            lt::clearStore();
+        }
+
         // finding ENB: the export reader against the real ENB file, and a module
         // walk that sees every module (4.7 stopped at 96 - FiveM loads more)
         {
@@ -715,11 +757,11 @@ int main(int argc, char** argv)
                   "which options a keyframe sets survives the file too");
             lt::clearStore();
             std::string old46 = "EscoEditorLights 2\nscope 0 Old46\ne 500";
-            for (int q = 0; q < ed::N; ++q) old46 += " 2";
+            for (int q = 0; q < 23; ++q) old46 += " 2";
             old46 += "\n";
             lt::parse(old46);
             lt::LightSet* o46 = lt::findSet("Old46", 0, false);
-            CHECK(o46 && o46->enb.n == 1 && o46->enb.k[0].set == lights::kEnbAll && o46->enb.k[0].v[5] == 2.0f,
+            CHECK(o46 && o46->enb.n == 1 && o46->enb.k[0].set == ((1u << 23) - 1u) && o46->enb.k[0].v[5] == 2.0f,
                   "a key written by 4.6 (every option, no mask) reads back as setting every option");
             lt::clearStore();
         }
