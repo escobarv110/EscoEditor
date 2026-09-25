@@ -1,4 +1,4 @@
-EscoEditor.asi 4.2  -  more control for the Rockstar Editor
+EscoEditor.asi 4.3  -  more control for the Rockstar Editor
 ======================================================================
 (formerly EditorCamSpeed.asi - same plugin, new name)
 
@@ -9,6 +9,20 @@ menu, adds scene lights you place in the picture with a 3D gizmo - fixed in
 the world, on the camera, or riding along with a ped, a vehicle or a prop -
 and keeps the free camera speed keys. The editor's own camera path,
 transitions, shake and depth of field are never touched.
+
+WHAT CHANGED IN 4.3
+  - Rockstar Editor Plus now actually installs when EscoEditor is there too.
+    RE+ needs four addresses and installs NOTHING unless it finds all four -
+    one of them is UpdateSmoothing, which EscoEditor hooks, and RE+ looks for
+    it by its first bytes. Our jump sitting there kept the whole mod dormant:
+    no menu, no smooth blend, no shake, no exporter. EscoEditor now takes all
+    of its hooks out for twelve seconds when it sees RE+ arrive, so RE+'s next
+    retry finds the game's own bytes and installs in full, and then puts its
+    own hooks back on top of RE+'s so both run. The log says when it happens.
+  - RE+ is recognised whatever its file has been renamed to (the module list
+    is searched for a name containing "rockstareditorplus"), instead of one
+    exact file name - a renamed RockstarEditorPlus-Custom.asi used to go
+    unnoticed, and then EscoEditor never stood aside for it.
 
 WHAT CHANGED IN 4.2
   - Both plugins now really do work together. Rockstar Editor Plus rewrites
@@ -297,7 +311,7 @@ WHAT CHANGED IN 2.9
 
 CHECK YOU HAVE THIS VERSION
   The first line of EscoEditor.log (next to the .asi) must say
-  "EscoEditor 4.2".
+  "EscoEditor 4.3".
 
 INSTALL
   FiveM:          close FiveM, run Install.bat - or copy EscoEditor.asi

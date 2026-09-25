@@ -1,4 +1,4 @@
-	constexpr const char* kVersion = "4.2";
+	constexpr const char* kVersion = "4.3";
 
 	// ------------------------------------------------------------------ paths
 	char    g_dir[MAX_PATH]  = {};   // folder of the .asi, trailing backslash
@@ -431,7 +431,43 @@
 
 	// Rockstar Editor+ in the process. It hooks five of the same functions we
 	// do, and finds them by their first bytes.
-	bool rePlusLoaded() { return GetModuleHandleA("RockstarEditorPlus.asi") != nullptr; }
+	// Rockstar Editor Plus, whatever its file has been renamed to: the loaded
+	// module list is walked for a name that contains "rockstareditorplus".
+	// Walked out of the PEB so this needs no import of its own - and the file
+	// is routinely renamed (RockstarEditorPlus-Custom.asi and the like), which
+	// a single GetModuleHandleA would miss, leaving us hooked in front of it.
+	bool rePlusLoaded()
+	{
+		__try
+		{
+			const uint8_t* peb = (const uint8_t*)__readgsqword(0x60);
+			const uint8_t* ldr = *(const uint8_t* const*)(peb + 0x18);
+			if (!ldr) return false;
+			const LIST_ENTRY* head = (const LIST_ENTRY*)(ldr + 0x20);      // InMemoryOrderModuleList
+			for (const LIST_ENTRY* e = head->Flink; e && e != head; e = e->Flink)
+			{
+				const uint8_t* entry = (const uint8_t*)e - 0x10;            // LDR_DATA_TABLE_ENTRY
+				// UNICODE_STRING lives in winternl.h, which clashes with more than
+				// it is worth here; the shape is Length, MaximumLength, then the
+				// pointer at +8 after the natural padding.
+				struct NtStr { uint16_t Length, MaximumLength; const wchar_t* Buffer; };
+				const NtStr* nm = (const NtStr*)(entry + 0x58);   // BaseDllName
+				if (!nm->Buffer || nm->Length < 2) continue;
+				char low[80];
+				int n = 0;
+				for (int i = 0; i < nm->Length / 2 && n < (int)sizeof(low) - 1; ++i)
+				{
+					wchar_t w = nm->Buffer[i];
+					if (w >= L'A' && w <= L'Z') w = (wchar_t)(w + 32);
+					low[n++] = (w < 128) ? (char)w : '_';
+				}
+				low[n] = 0;
+				if (strstr(low, "rockstareditorplus")) return true;
+			}
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+		return false;
+	}
 
 	// Looked up once and kept, because the render thread asks every frame.
 	// Rockstar Editor Plus rewrites the free camera's response blocks from its

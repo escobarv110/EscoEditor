@@ -9,7 +9,7 @@ place in the picture with a 3D gizmo and key over the clip**.
 No ScriptHookV, no Rockstar Editor+, no Menyoo. One `.asi`, and it runs
 alongside Rockstar Editor+ if you use that too.
 
-<sub>Version 4.2 · GTA V b3258–b3751 and singleplayer b3407 · MIT</sub>
+<sub>Version 4.3 · GTA V b3258–b3751 and singleplayer b3407 · MIT</sub>
 
 ---
 
@@ -87,9 +87,17 @@ happened lives in `EscoEditor.log` beside it.
 
 ## Alongside Rockstar Editor+
 
-Both can be installed together. EscoEditor notices RE+ in the process, waits
-for it to install its own hooks and then goes in on top of them, so RE+'s menu,
-smooth blend, camera shake and exporter keep working.
+Both can be installed together, and EscoEditor does the work to make that true.
+
+RE+ needs four addresses — `UpdateSmoothing`, the marker-index function, the
+marker storage and the replay clock — and installs **nothing** unless it finds
+all four, by their first bytes. EscoEditor hooks `UpdateSmoothing`, so a jump
+sitting there is enough to keep the whole of RE+ dormant. So: EscoEditor waits
+for RE+ when it is already loaded, and when RE+ turns up later it takes **all**
+of its own hooks out for twelve seconds — RE+ retries every two seconds, finds
+the game's own bytes, and installs in full — then rebuilds each hook on top of
+whatever RE+ left behind, so both run. RE+ is recognised however its file has
+been renamed.
 
 The free camera belongs to EscoEditor when both are loaded. RE+ rewrites the
 camera's response blocks every frame from its own tick, so EscoEditor writes
@@ -111,7 +119,7 @@ build\selftest\selftest.bat   :: builds the self-test
 build\selftest\selftest.exe            :: a cameras.ymt may be passed, but is not needed
 ```
 
-The self-test is 128 checks over the parts that can run outside the game: the
+The self-test is 135 checks over the parts that can run outside the game: the
 metadata parser, the light record, keyframe interpolation, the light file
 format, the entity pools, the marker clipboard, Free Look's snapshots, MinHook
 itself. It prints `SELFTEST: all checks passed` or the first thing that broke.

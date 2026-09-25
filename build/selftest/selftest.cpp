@@ -25,7 +25,16 @@ __declspec(noinline) int mhTarget(int x)
     return a + b + c;
 }
 static int (*mhOrig)(int) = nullptr;
+__declspec(noinline) int mhTarget2(int x)
+{
+    volatile int a = x + 3;
+    volatile int b = a * 2;
+    volatile int c = b - 1;
+    return a + b + c;
+}
+static int (*mhOrig2)(int) = nullptr;
 __declspec(noinline) int mhDetour(int x) { return mhOrig(x) * 10; }
+__declspec(noinline) int mhDetour2(int x) { return mhOrig2(x) * 7; }
 
 int main(int argc, char** argv)
 {
@@ -792,6 +801,41 @@ int main(int argc, char** argv)
             CHECK(call(3) == before, "disabling it puts the original back");
         }
         MH_Uninitialize();
+    }
+
+    {   // Standing aside for Rockstar Editor Plus: it needs the game's own first
+        // bytes to find its four required addresses, and installs nothing at all
+        // without them. Our hooks have to come out and then go back ON TOP.
+        int (* volatile call2)(int) = &mhTarget2;
+        const int plain = call2(3);
+        CHECK(hookFn((uintptr_t)&mhTarget2, (void*)&mhDetour2, (void**)&mhOrig2, "selftest"),
+              "a hook goes in through the wrapper and is recorded");
+        CHECK(call2(3) == plain * 7, "the detour runs");
+        CHECK(unhookAll() >= 1, "unhookAll takes our hooks out");
+        CHECK(call2(3) == plain, "the original bytes are back - what another plugin's signature scan needs to see");
+        CHECK(rehookAll() >= 1, "rehookAll builds each one again");
+        CHECK(call2(3) == plain * 7, "and the detour runs once more, chained onto whatever was there");
+        unhookAll();
+    }
+
+    {   // Rockstar Editor Plus is recognised however its file has been renamed
+        CHECK(!rePlusLoaded(), "no Rockstar Editor Plus in this process to start with");
+        char sysdir[MAX_PATH] = {}, tmpdir[MAX_PATH] = {}, src[MAX_PATH] = {}, dst[MAX_PATH] = {};
+        GetSystemDirectoryA(sysdir, sizeof(sysdir));
+        GetTempPathA(sizeof(tmpdir), tmpdir);
+        snprintf(src, sizeof(src), "%s\version.dll", sysdir);
+        snprintf(dst, sizeof(dst), "%sRockstarEditorPlus-Custom-selftest.asi", tmpdir);
+        if (CopyFileA(src, dst, FALSE))
+        {
+            HMODULE h = LoadLibraryA(dst);
+            if (h)
+            {
+                CHECK(rePlusLoaded(), "a module whose name merely CONTAINS rockstareditorplus is found");
+                FreeLibrary(h);
+            }
+            else CHECK(false, "could not load the stand-in module for the name test");
+            DeleteFileA(dst);
+        }
     }
 
     if (g_fail) printf("SELFTEST: %d FAILURE(S) of %d checks (built " __DATE__ " " __TIME__ ")\n", g_fail, g_ran);

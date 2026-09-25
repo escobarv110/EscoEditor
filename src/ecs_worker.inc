@@ -55,6 +55,22 @@ void installModules()
 	if (!lights::g_ready)    lights::install();
 }
 
+// Rockstar Editor Plus needs four addresses - UpdateSmoothing, the marker
+// index function, the marker storage and the replay clock - and installs
+// NOTHING unless it finds all four. It finds them by their first bytes, and we
+// hook UpdateSmoothing, so our jump sitting there is enough to keep the whole
+// mod dormant. Its fallback thread retries every two seconds for about two
+// minutes, so stepping out of the way for a moment is all it takes.
+void standAsideFor(const char* why)
+{
+	const int out = unhookAll();
+	logf("hook: %s - EscoEditor's %d hook(s) taken out for 12 s so it can find the game's own bytes "
+		 "(it needs UpdateSmoothing, and installs nothing without it). Menu rows and lights pause meanwhile.", why, out);
+	Sleep(12000);
+	const int back = rehookAll();
+	logf("hook: %d hook(s) back in, on top of whatever Rockstar Editor Plus left behind - both plugins run now", back);
+}
+
 DWORD WINAPI Worker(LPVOID)
 {
 	Sleep(2000);
@@ -99,9 +115,12 @@ DWORD WINAPI Worker(LPVOID)
 		     "rewrites it every frame (NoEditorRestrictions) will win over this plugin");
 	if (g_cfg.hotkeys >= 3) startWheel();
 
-	ULONGLONG nextScan = GetTickCount64() + 45000, nextPoll = 0;
+	const ULONGLONG g_startedAt = GetTickCount64();
+	ULONGLONG nextScan = g_startedAt + 45000, nextPoll = 0;
 	ULONGLONG nextHookTry = GetTickCount64() + 5000;
 	int hookTries = 0;
+	ULONGLONG nextRePlusCheck = GetTickCount64() + 3000;
+	int rePlusStandAsides = 0;
 	int  lastEdit = -12345, editLogs = 0, lastMode = -12345;
 	bool wasLive = false, warnedRePlus = false;
 
@@ -124,6 +143,19 @@ DWORD WINAPI Worker(LPVOID)
 				g_metaCount = 0;
 				g_lastWrittenH = -1.0f;
 				nextScan = now + 3000;
+			}
+		}
+
+		// Rockstar Editor Plus arriving after us: it cannot resolve while our
+		// hooks are in, so we step out of the way once and let it.
+		if (!g_rePlus && rePlusStandAsides == 0 && now >= nextRePlusCheck && now < 180000 + g_startedAt)
+		{
+			nextRePlusCheck = now + 2000;
+			if (rePlusLoaded())
+			{
+				g_rePlus = true;
+				++rePlusStandAsides;
+				standAsideFor("Rockstar Editor Plus has just been loaded into the game");
 			}
 		}
 

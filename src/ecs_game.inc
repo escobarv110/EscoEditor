@@ -25,6 +25,12 @@
 volatile LONG g_hookStalls = 0;         // hooks that could not be enabled yet
 extern "C" BOOL g_mhFreezeOptional;     // MinHook (hook.c): hook without pausing threads
 
+// Every hook we place, so they can all be taken out and put back when
+// Rockstar Editor Plus needs the game's own bytes to find its signatures.
+struct Placed { uintptr_t target; void* detour; void** orig; const char* what; };
+Placed g_placed[16] = {};
+int    g_placedCount = 0;
+
 bool hookFn(uintptr_t target, void* detour, void** orig, const char* what)
 {
 	const MH_STATUS init = MH_Initialize();
@@ -56,7 +62,40 @@ bool hookFn(uintptr_t target, void* detour, void** orig, const char* what)
 			logf("hook: MH_EnableHook(%s) failed: %s", what, MH_StatusToString(en));
 		return false;
 	}
+	if (g_placedCount < 16)
+	{
+		g_placed[g_placedCount++] = { target, detour, orig, what };
+	}
 	return true;
+}
+
+// All of our hooks out of the way, so another plugin scanning for the game's
+// own first bytes finds them. Returns how many came out.
+int unhookAll()
+{
+	int n = 0;
+	for (int i = 0; i < g_placedCount; ++i)
+	{
+		MH_DisableHook((void*)g_placed[i].target);
+		if (MH_RemoveHook((void*)g_placed[i].target) == MH_OK) ++n;
+	}
+	return n;
+}
+
+// And back in. Created afresh rather than merely re-enabled: whatever is at the
+// target now - another plugin's jump, most likely - is what the new trampoline
+// is built from, so calling the original runs their hook and then the game's
+// code. Re-enabling the old one would write over their jump and silence them.
+int rehookAll()
+{
+	int n = 0;
+	for (int i = 0; i < g_placedCount; ++i)
+	{
+		const Placed& p = g_placed[i];
+		if (MH_CreateHook((void*)p.target, p.detour, p.orig) != MH_OK) continue;
+		if (MH_EnableHook((void*)p.target) == MH_OK) ++n;
+	}
+	return n;
 }
 
 // ---------------------------------------------------- sReplayMarkerInfo
