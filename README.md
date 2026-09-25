@@ -9,7 +9,7 @@ place in the picture with a 3D gizmo and key over the clip**.
 No ScriptHookV, no Rockstar Editor+, no Menyoo. One `.asi`, and it runs
 alongside Rockstar Editor+ if you use that too.
 
-<sub>Version 4.10 · GTA V b3258–b3751 and singleplayer b3407 · MIT</sub>
+<sub>Version 4.11 · GTA V b3258–b3751 and singleplayer b3407 · MIT</sub>
 
 ---
 
@@ -38,18 +38,16 @@ alongside Rockstar Editor+ if you use that too.
 **ENB depth of field**
 
 * With **ENBSeries** in the game (its `d3d11.dll` exports an SDK) and ENB's
-  `EnableDepthOfField` on, the **ENB** switch hands ENB's `enbdepthoffield.fx`
-  the Rockstar Editor's own depth of field, keyframe by keyframe: a Custom
-  keyframe's Focal Distance is where ENB focuses (in metres — converted to
-  NVE's own unit), its Intensity decides how quickly the blur comes in
-  (100% = NVE's own aperture), None means no blur, Default leaves ENB's focus
-  alone — blended from one keyframe to the next.
-* **Every ENB DOF option, per keyframe**, right in the keyframe's own Depth of
-  Field menu: one row each for every option the running NVE technique reads
-  (blur size, maximum blur, near field, chromatic spread, anamorphic, lens
-  distortion, quality…). The list scrolls past the column's 16 rows, and
-  holding left/right speeds up like the game's own sliders. Each option
-  blends between the keyframes that set it.
+  `EnableDepthOfField` on, the **ENB** switch makes ENB's depth of field part
+  of the clip, keyframe by keyframe — whatever the game's own Focus row says
+  (set it to None so the game's blur does not add to ENB's).
+* **A short list, per keyframe**, in the keyframe's own Depth of Field menu:
+  Focus Mode (**Auto** or **Manual** — NVE's Auto-focus or Manual technique),
+  Focus Distance in metres, Aperture, Near Field Blur and Power, Blur Size,
+  Maximum Size, Chromatic Spread, Anamorphic and its stretch. Each blends
+  between the keyframes that set it; holding left/right speeds up like the
+  game's own sliders. Optionally, a Custom keyframe's Focal Distance and
+  Intensity can drive it too.
 * Values go in from ENB's own per-frame callback, only when they change, and
   ENB's own values go back when the switch is off and before ENB saves, so its
   `.ini` keeps yours.

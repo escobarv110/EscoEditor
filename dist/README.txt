@@ -1,4 +1,4 @@
-EscoEditor.asi 4.10  -  more control for the Rockstar Editor
+EscoEditor.asi 4.11  -  more control for the Rockstar Editor
 ======================================================================
 (formerly EditorCamSpeed.asi - same plugin, new name)
 
@@ -9,6 +9,25 @@ menu, adds scene lights you place in the picture with a 3D gizmo - fixed in
 the world, on the camera, or riding along with a ped, a vehicle or a prop -
 and keeps the free camera speed keys. The editor's own camera path,
 transitions, shake and depth of field are never touched.
+
+WHAT CHANGED IN 4.11
+  - ENB is its own depth of field. The game's Focus row (Default / Custom /
+    None) no longer switches it: with None - the way to keep the game's own
+    blur from adding to ENB's - ENB used to get an aperture of 0 and nothing
+    blurred, near field included. Now the ENB rows decide, per keyframe.
+  - The ENB rows are short, like ENB's own window: Focus Mode, Focus
+    Distance, Aperture, Near Field Blur, Near Field Power, Blur Size, Maximum
+    Size, Chromatic Spread, Anamorphic, Anamorphic Stretch. A switch that is
+    Off hides what hangs on it. Lens distortion, quality and the rest are gone
+    from the menu (the light editor still has them, under More ENB options).
+  - Focus Mode: Auto or Manual, per keyframe. Auto switches ENB to NVE's
+    "Gameplay DOF Auto-focus" technique, which focuses on the middle of the
+    picture; Manual to "Gameplay DOF Manual", focused at Focus Distance. It
+    holds from its keyframe to the next. If ENB will not switch technique from
+    outside, the log says so and the row goes away.
+  - Following the game's Custom Focal Distance and Intensity is now opt-in
+    (EnbDofFollowGame, or the light editor), and an ENB row set on the
+    keyframe always wins over it.
 
 WHAT CHANGED IN 4.10
   - ENB: the focus distance is where ENB focuses. NVE's "Manual Focus :
@@ -423,7 +442,7 @@ WHAT CHANGED IN 2.9
 
 CHECK YOU HAVE THIS VERSION
   The first line of EscoEditor.log (next to the .asi) must say
-  "EscoEditor 4.10".
+  "EscoEditor 4.11".
 
 INSTALL
   FiveM:          close FiveM, run Install.bat - or copy EscoEditor.asi

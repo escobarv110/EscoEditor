@@ -890,18 +890,18 @@ namespace lightui
 
 		bool on = g_cfg.enbDof;
 		if (ImGui::Checkbox("ENB", &on)) enbdof::setOn(on);
-		tip("On: ENB draws the depth of field, and it changes with the clip - every ENB DOF option below, keyed if you like, and the focus and strength of each Rockstar Editor keyframe.\n"
+		tip("On: ENB draws the depth of field, and it changes with the clip - the options below, per keyframe in the Depth of Field menu or keyed here. The game's own Focus row does not switch it off: set that to None so the game's blur does not add to ENB's.\n"
 			"Off: ENB's own settings are put back exactly as they were.\n"
 			"The same switch is the ENB row at the bottom of the Depth of Field menu. ENB's EnableDepthOfField has to be on.");
 
 		bool follow = g_cfg.enbFollow;
-		if (ImGui::Checkbox("Follow the Rockstar Editor DOF", &follow))
+		if (ImGui::Checkbox("Also follow the game's Custom DOF", &follow))
 		{
 			g_cfg.enbFollow = follow;
-			iniWriteInt("EnbDofFollow", follow ? 1 : 0);
+			iniWriteInt("EnbDofFollowGame", follow ? 1 : 0);
 		}
-		tip("Each keyframe's own Depth of Field drives ENB, blended from one keyframe to the next:\n"
-			"Custom: its Focal Distance is where ENB focuses, its Intensity how quickly the blur comes in; None means no blur; Default leaves ENB's focus and aperture alone.");
+		tip("Off (the default): only the ENB rows and keys drive ENB.\n"
+			"On: a keyframe whose game Focus is Custom also hands ENB its Focal Distance and Intensity, unless its ENB rows set them. Default and None change nothing.");
 		if (g_cfg.enbFollow)
 		{
 			ImGui::SetNextItemWidth(160.0f);
@@ -911,38 +911,56 @@ namespace lightui
 				snprintf(b, sizeof(b), "%.3f", g_cfg.enbStrength);
 				WritePrivateProfileStringA(kSection, "EnbDofStrength", b, g_ini);
 			}
-			tip("1 = a keyframe at 100%% intensity gets NVE's own aperture (0.5), 50%% gets 0.125, 20%% gets 0.02.\n"
+			tip("1 = a keyframe at 100% intensity gets aperture 0.5 (Manual) / 2.0 (Auto), 50% gets 0.125 / 1.0.\n"
 				"Higher makes every intensity blur sooner behind and in front of the focus.");
 			if (enbdof::s_editorLine[0]) ImGui::TextDisabled("Now: %s", enbdof::s_editorLine);
 		}
 
-		// every option, grouped the way ENB's own window groups them
+		// the options that matter, as the Depth of Field menu has them; the rest folded away
 		ImGui::Spacing();
 		ImGui::TextDisabled("ENB's options for this clip (what a new key holds):");
-		for (int i = 0; i < enbdof::N; ++i)
-		{
+		auto option = [](int i) {
 			const enbdof::Def& d = enbdof::kDefs[i];
-			if (!enbdof::s_known[i] || enbdof::isLabel(i)) continue;
+			if (!enbdof::s_known[i] || enbdof::isLabel(i)) return;
 			ImGui::PushID(2000 + i);
 			float& v = enbdof::s_manual[i];
-			if (d.kind == enbdof::K_BOOL)
+			const char* name = enbdof::menuLabel(i);
+			if (i == enbdof::I_FOCUS)
+			{
+				int m = v > 0.5f ? 1 : 0;
+				ImGui::TextUnformatted("Focus Mode");
+				ImGui::SameLine();
+				if (ImGui::RadioButton("Auto", m == 0)) v = 0.0f;
+				ImGui::SameLine();
+				if (ImGui::RadioButton("Manual", m == 1)) v = 1.0f;
+			}
+			else if (d.kind == enbdof::K_BOOL)
 			{
 				bool b = v > 0.5f;
-				if (ImGui::Checkbox(d.label, &b)) v = b ? 1.0f : 0.0f;
+				if (ImGui::Checkbox(name, &b)) v = b ? 1.0f : 0.0f;
 			}
 			else if (d.kind == enbdof::K_INT)
 			{
 				int n = (int)floorf(v + 0.5f);
-				if (ImGui::DragInt(d.label, &n, 0.1f, (int)d.lo, (int)d.hi)) v = (float)n;
+				if (ImGui::DragInt(name, &n, 0.1f, (int)d.lo, (int)d.hi)) v = (float)n;
 			}
 			else
 			{
 				const float speed = (d.hi - d.lo) > 50.0f ? 0.05f : 0.005f;
-				ImGui::DragFloat(d.label, &v, speed, d.lo, d.hi, "%.3f", (d.hi - d.lo) > 50.0f ? ImGuiSliderFlags_Logarithmic : 0);
+				ImGui::DragFloat(name, &v, speed, d.lo, d.hi, "%.3f", (d.hi - d.lo) > 50.0f ? ImGuiSliderFlags_Logarithmic : 0);
 			}
-			if (g_cfg.enbFollow && (i == enbdof::I_DIST || i == enbdof::I_APERTURE || i == enbdof::I_AUTO_APERTURE))
-				tip("Set by a Custom Rockstar Editor keyframe while Follow is on: its Focal Distance and Intensity rows.");
+			if (enbdof::hint(i)[0]) tip(enbdof::hint(i));
 			ImGui::PopID();
+		};
+		const bool autoF = enbdof::s_known[enbdof::I_FOCUS] ? enbdof::s_manual[enbdof::I_FOCUS] < 0.5f : enbdof::techAuto();
+		const int mainOpts[] = { enbdof::I_FOCUS, autoF ? -1 : enbdof::I_DIST, autoF ? enbdof::I_AUTO_APERTURE : enbdof::I_APERTURE,
+								 enbdof::I_NEAR, autoF ? enbdof::I_AUTO_NEARPOWER : enbdof::I_NEARPOWER, 12, 14, 11, 17, 18 };
+		bool isMain[enbdof::N] = {};
+		for (int i : mainOpts) if (i >= 0) { isMain[i] = true; option(i); }
+		if (ImGui::TreeNode("More ENB options"))
+		{
+			for (int i = 0; i < enbdof::N; ++i) if (!isMain[i]) option(i);
+			ImGui::TreePop();
 		}
 		if (ImGui::Button("Back to ENB's own values")) enbdof::resetManual();
 		tip("Every option above back to what ENB had before - the values in its enbdepthoffield.fx.ini.");

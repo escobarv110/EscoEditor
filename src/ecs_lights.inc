@@ -150,7 +150,7 @@ namespace lights
 	// Every option of ENB's depth of field, keyed over the clip for the ENB
 	// option (ecs_enbdof.inc). Floats interpolate, whole numbers round, the
 	// switches change at the key.
-	constexpr int kEnbParams = 29, kMaxEnbKeys = 16;
+	constexpr int kEnbParams = 30, kMaxEnbKeys = 16;
 	struct EnbKey { float t; uint32_t set; float v[kEnbParams]; };   // `set`: bit i = this key sets option i
 	struct EnbTrack { int n; EnbKey k[kMaxEnbKeys]; };
 
@@ -180,7 +180,7 @@ namespace lights
 			if (!a && !b) continue;
 			filled |= bit;
 			if (!a) { out[p] = b->v[p]; continue; }                  // before the first: it holds
-			if (!b || kinds[p] == 2) { out[p] = a->v[p]; continue; } // after the last, or a switch
+			if (!b || kinds[p] >= 2) { out[p] = a->v[p]; continue; } // after the last, or a switch / a choice
 			float u = b->t > a->t ? (t - a->t) / (b->t - a->t) : 0.0f;
 			if (u < 0.0f) u = 0.0f;
 			if (u > 1.0f) u = 1.0f;
@@ -1957,6 +1957,7 @@ namespace lights
 				uint32_t mask = 0;
 				int from = 0;
 				if (got == 2 + kEnbParams)      { mask = (uint32_t)g[1] & kEnbAll;           from = 2; }
+				else if (got == 2 + 29)         { mask = (uint32_t)g[1] & ((1u << 29) - 1u); from = 2; }   // 4.9 / 4.10
 				else if (got == 2 + 23)         { mask = (uint32_t)g[1] & ((1u << 23) - 1u); from = 2; }
 				else if (got == 1 + 23)         { mask = (1u << 23) - 1u;                     from = 1; }
 				if (from)

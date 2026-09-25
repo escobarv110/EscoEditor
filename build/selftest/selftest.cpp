@@ -593,19 +593,22 @@ int main(int argc, char** argv)
         a.have = true; a.mode = dof::MODE_CUSTOM; a.focus = dof::FOCUS_MANUAL; a.dist = 4.0f;  a.intensity = 50.0f;  a.t = 0.0f;
         b.have = true; b.mode = dof::MODE_CUSTOM; b.focus = dof::FOCUS_MANUAL; b.dist = 12.0f; b.intensity = 100.0f; b.t = 1000.0f;
         ed::applyEditor(a, b, 0.0f, 1.0f, v, nullptr, 0);
-        CHECK(fabsf(v[ed::I_DIST] - 4.0f) < 1e-4f && fabsf(v[ed::I_APERTURE] - 0.125f) < 1e-5f && v[ed::I_MOUSE] == 0.0f,
-              "a Custom keyframe: focus at its 4 m, intensity 50%% = aperture 0.125, mouse focus off (%.2f m, %.4f)",
+        CHECK(fabsf(v[ed::I_DIST] - 4.0f) < 1e-4f && fabsf(v[ed::I_APERTURE] - 0.125f) < 1e-5f && fabsf(v[ed::I_AUTO_APERTURE] - 1.0f) < 1e-5f,
+              "following a Custom keyframe: focus at its 4 m, intensity 50%% = aperture 0.125 (Auto-focus 1.0) (%.2f m, %.4f)",
               v[ed::I_DIST], v[ed::I_APERTURE]);
         ed::applyEditor(a, b, 500.0f, 1.0f, v, nullptr, 0);
-        CHECK(fabsf(v[ed::I_DIST] - 8.0f) < 1e-4f && fabsf(v[ed::I_APERTURE] - 0.28125f) < 1e-5f && fabsf(v[ed::I_AUTO_APERTURE] - 0.28125f) < 1e-5f,
+        CHECK(fabsf(v[ed::I_DIST] - 8.0f) < 1e-4f && fabsf(v[ed::I_APERTURE] - 0.28125f) < 1e-5f && fabsf(v[ed::I_AUTO_APERTURE] - 1.5f) < 1e-5f,
               "halfway to the next keyframe it blends: 8 m, 75%% = aperture 0.281 (%.2f m, %.4f)", v[ed::I_DIST], v[ed::I_APERTURE]);
         ed::applyEditor(b, b, 1000.0f, 1.0f, v, nullptr, 0);
         CHECK(fabsf(v[ed::I_APERTURE] - 0.5f) < 1e-5f, "100%% is NVE's own aperture, 0.5 (%.3f)", v[ed::I_APERTURE]);
 
         ed::EdDof none = a;
         none.mode = dof::MODE_NONE;
-        ed::applyEditor(none, b, 0.0f, 1.0f, v, nullptr, 0);
-        CHECK(v[ed::I_APERTURE] == 0.0f && v[ed::I_AUTO_APERTURE] == 0.0f, "a keyframe set to None means no blur");
+        float nv[ed::N] = {};
+        nv[ed::I_DIST] = 7.0f; nv[ed::I_APERTURE] = 0.3f; nv[ed::I_AUTO_APERTURE] = 1.2f;
+        ed::applyEditor(none, b, 0.0f, 1.0f, nv, nullptr, 0);
+        CHECK(nv[ed::I_DIST] == 7.0f && nv[ed::I_APERTURE] == 0.3f && nv[ed::I_AUTO_APERTURE] == 1.2f,
+              "a keyframe whose game Focus is None leaves ENB's DOF alone - None only keeps the game's own blur out");
 
         float keep[ed::N] = {};
         keep[ed::I_DIST] = 7.0f; keep[ed::I_APERTURE] = 0.5f;
@@ -661,20 +664,36 @@ int main(int argc, char** argv)
             for (int i = ed::I_SEC_NEAR; i <= ed::I_SEC_MISC; ++i) if (!ed::isLabel(i)) labels = false;
             for (int i = 0; i < ed::I_SEC_NEAR; ++i) if (ed::isLabel(i)) labels = false;
             CHECK(labels, "the six separator lines are labels, never sent to ENB; the 23 real options are not");
-            ed::s_tech = ed::TECH_MANUAL;
-            bool listOk = ed::listCount() == 14;
-            for (int k = 0; k < ed::listCount(); ++k)
+            // the menu list, as ENB's own window has it and no more
+            for (int i = 0; i < ed::N; ++i) ed::s_known[i] = !ed::isLabel(i);
+            ed::s_manual[ed::I_FOCUS] = 1.0f; ed::s_manual[ed::I_NEAR] = 1.0f; ed::s_manual[17] = 1.0f;
+            ed::buildList();
+            const int wantManual[] = { ed::I_FOCUS, ed::I_DIST, ed::I_APERTURE, ed::I_NEAR, ed::I_NEARPOWER, 12, 14, 11, 17, 18 };
+            bool listOk = ed::listCount() == 10;
+            for (int k = 0; listOk && k < 10; ++k) if (ed::listParam(k) != wantManual[k]) listOk = false;
+            CHECK(listOk && ed::listParam(10) == -1, "Manual: Focus Mode, Focus Distance, Aperture, Near Field Blur / Power, Blur Size, Maximum Size, Chromatic Spread, Anamorphic / Stretch");
+            ed::s_manual[ed::I_FOCUS] = 0.0f; ed::s_manual[ed::I_NEAR] = 0.0f; ed::s_manual[17] = 0.0f;
+            ed::buildList();
+            const int wantAuto[] = { ed::I_FOCUS, ed::I_AUTO_APERTURE, ed::I_NEAR, 12, 14, 11, 17 };
+            bool autoOk = ed::listCount() == 7;
+            for (int k = 0; autoOk && k < 7; ++k) if (ed::listParam(k) != wantAuto[k]) autoOk = false;
+            CHECK(autoOk, "Auto: no distance, Auto-focus's own aperture, and a switch that is off hides what hangs on it");
+            char fb[16];
+            CHECK(!strcmp(ed::format(ed::I_FOCUS, 0.0f, fb, 16), "Auto") && !strcmp(ed::format(ed::I_FOCUS, 1.0f, fb, 16), "Manual") &&
+                  ed::stepped(ed::I_FOCUS, 1.0f, 1) == 0.0f && ed::stepped(ed::I_FOCUS, 0.0f, -8) == 1.0f && ed::reshapes(ed::I_FOCUS),
+                  "Focus Mode reads Auto / Manual, flips either way, and changing it redraws the rows");
+            ed::kinds[ed::I_FOCUS] = (uint8_t)ed::kDefs[ed::I_FOCUS].kind;
             {
-                const int q = ed::listParam(k);
-                if (q < 0 || ed::isLabel(q) || q == ed::I_DIST || q == ed::I_APERTURE || q == ed::I_AUTO_APERTURE || q == ed::I_MOUSE) listOk = false;
-                if (q >= 6 && q <= 10) listOk = false;                     // auto-focus options: the Manual technique never reads them
+                lights::EnbTrack ft = {};
+                float f0[ed::N] = {}, f1[ed::N] = {};
+                f0[ed::I_FOCUS] = 1.0f; f1[ed::I_FOCUS] = 0.0f;
+                lights::addEnbKey(ft, 0.0f, f0);
+                lights::addEnbKey(ft, 1000.0f, f1);
+                float fo[ed::N] = {};
+                lights::evalEnb(ft, 900.0f, fo, ed::kinds);
+                CHECK(fo[ed::I_FOCUS] == 1.0f, "Focus Mode holds until the next keyframe - no switch halfway");
             }
-            CHECK(listOk && ed::listParam(14) == -1, "Manual technique: 14 rows, none the Manual pass ignores, focus and aperture left to the game's rows");
-            ed::s_tech = ed::TECH_AUTO;
-            bool autoOk = ed::listCount() == 18;
-            for (int k = 0; k < ed::listCount(); ++k) if (ed::listParam(k) == ed::I_NEARPOWER) autoOk = false;
-            CHECK(autoOk, "Auto-focus technique: its own near field power and auto-focus options instead");
-            ed::s_tech = -1;
+            for (int i = 0; i < ed::N; ++i) { ed::s_known[i] = false; ed::s_manual[i] = 0.0f; }
             CHECK(fabsf(ed::stepped(ed::I_NEARPOWER, 20.0f, 1) - 22.0f) < 1e-3f && ed::stepped(ed::I_NEARPOWER, 0.0f, 1) == 0.5f &&
                   ed::stepped(ed::I_NEARPOWER, 0.4f, -1) == 0.0f,
                   "near field power moves by 10%% of itself, starts from 0 and gets back to 0");
@@ -749,8 +768,8 @@ int main(int argc, char** argv)
             ap[ed::I_APERTURE] = 2.2f;
             ca.intensity = 100.0f;
             ed::applyEditor(ca, ca, 0.0f, 1.0f, ap, nullptr, 0, 1u << ed::I_APERTURE);
-            CHECK(fabsf(ap[ed::I_APERTURE] - 0.5f) < 1e-5f && ap[ed::I_DIST] == 4.0f,
-                  "a Custom keyframe's Intensity row is the aperture, over an old key's 2.2 (%.3f)", ap[ed::I_APERTURE]);
+            CHECK(ap[ed::I_APERTURE] == 2.2f && ap[ed::I_DIST] == 4.0f,
+                  "the keyframe's own ENB Aperture row wins over the game's Intensity; the focus still follows (%.3f)", ap[ed::I_APERTURE]);
             ed::EdDof pct = ca;
             pct.intensity = 0.5f;                         // a fraction: 50%
             float pv[ed::N] = {};
@@ -781,6 +800,15 @@ int main(int argc, char** argv)
             CHECK(back2 && back2->enb.n == 2 && back2->enb.k[1].set == ((1u << 12) | (1u << ed::I_DIST)) && back2->enb.k[0].set == lights::kEnbAll,
                   "which options a keyframe sets survives the file too");
             lt::clearStore();
+            {
+                std::string l410 = "EscoEditorLights 2\nscope 0 Old410\ne 250 4096";
+                for (int q = 0; q < 29; ++q) l410 += " 3";
+                l410 += "\n";
+                lt::parse(l410);
+                lt::LightSet* o410 = lt::findSet("Old410", 0, false);
+                CHECK(o410 && o410->enb.n == 1 && o410->enb.k[0].set == 4096u && o410->enb.k[0].v[12] == 3.0f && o410->enb.k[0].v[ed::I_FOCUS] == 0.0f,
+                      "a 4.9 / 4.10 key (29 options) still reads, and sets no Focus Mode");
+            }
             std::string old46 = "EscoEditorLights 2\nscope 0 Old46\ne 500";
             for (int q = 0; q < 23; ++q) old46 += " 2";
             old46 += "\n";

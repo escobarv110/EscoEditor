@@ -132,6 +132,7 @@ namespace menu
 			// has room for below the game's own rows; the rest scroll in
 			if (g_cfg.enbDof && enbdof::s_ready)
 			{
+				enbdof::buildList();              // this keyframe's: Manual and Auto show different rows
 				const int count = enbdof::listCount();
 				int room = kColumnCapacity - (g_first > 0 ? g_first : 0) - s_shown;
 				if (room > R_ENBO_LAST - R_ENBO0 + 1) room = R_ENBO_LAST - R_ENBO0 + 1;
@@ -236,7 +237,7 @@ namespace menu
 		case R_LKEY:    return "Light Editor Key";
 		case R_LALL:    return "Lights In Every Clip";
 		default:
-			if (isEnbOpt(r)) { const int p = enbParam(r); return p >= 0 ? enbdof::kDefs[p].label : ""; }
+			if (isEnbOpt(r)) return enbdof::menuLabel(enbParam(r));
 			return "";
 		}
 	}
@@ -324,7 +325,7 @@ namespace menu
 		case R_ENB:
 			if (!enbdof::s_found) return "No ENB in the game. With ENB (NVE's is fine) this row hands it the depth of field of every keyframe.";
 			if (!enbdof::s_ready) return "ENB found - waiting for its depth of field shader to load (EnableDepthOfField on in ENB).";
-			return "On: ENB draws the blur. Set this keyframe to Custom: Focal Distance is where ENB focuses, Intensity how fast the blur comes in. The rows below are ENB's own, per keyframe.";
+			return "On: ENB draws the depth of field with the rows below, set per keyframe - whatever the game's Focus row says. Set that to None so the game's own blur does not add to ENB's.";
 		case R_LOPEN:
 			if (!lightui::g_imgui) return "Needs ReShade with add-on support: the light editor is a ReShade window.";
 			snprintf(buf, sizeof(buf), "Place lights with a 3D gizmo. %s opens and closes it too.", keyName(g_cfg.keyLights, s, sizeof(s)));
@@ -404,7 +405,12 @@ namespace menu
 		case R_LALL:    lights::toggleAllClips(); break;
 		case R_ENB:     enbdof::setOn(!g_cfg.enbDof); return true;     // the option rows come and go
 		default:
-			if (isEnbOpt(r)) enbdof::stepHere(enbParam(r), delta);
+			if (isEnbOpt(r))
+			{
+				const int p = enbParam(r);
+				enbdof::stepHere(p, delta);
+				return enbdof::reshapes(p);       // Focus Mode, Near Field Blur, Anamorphic add or remove rows
+			}
 			break;
 		}
 		return false;
@@ -428,7 +434,12 @@ namespace menu
 		case R_LOPEN:  if (lightui::g_imgui) InterlockedExchange(&lights::g_openReq, 1); return false;
 		case R_LKEY:   lights::beginCapture(lights::CAP_MENU); return false;
 		default:
-			if (isEnbOpt(r)) enbdof::clearHere(enbParam(r));
+			if (isEnbOpt(r))
+			{
+				const int p = enbParam(r);
+				enbdof::clearHere(p);
+				return enbdof::reshapes(p);
+			}
 			return false;
 		}
 	}
