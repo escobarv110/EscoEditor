@@ -9,7 +9,7 @@ place in the picture with a 3D gizmo and key over the clip**.
 No ScriptHookV, no Rockstar Editor+, no Menyoo. One `.asi`, and it runs
 alongside Rockstar Editor+ if you use that too.
 
-<sub>Version 4.4 · GTA V b3258–b3751 and singleplayer b3407 · MIT</sub>
+<sub>Version 4.5 · GTA V b3258–b3751 and singleplayer b3407 · MIT</sub>
 
 ---
 
@@ -60,7 +60,10 @@ alongside Rockstar Editor+ if you use that too.
 * Lights are saved per project and clip in `EscoEditor.lights.txt`, and
   **"Same lights in every clip"** or **"Copy from"** move a rig between clips
   and projects.
-* The lights are in the game's own video export, not just in playback.
+* The lights, and the keyed sky, are in an export - the game's own Export
+  button and Rockstar Editor Plus's exporter alike. The list is rebuilt by
+  the light consumer itself when nothing else has, so it does not depend on
+  the replay director ticking between encoded frames.
 
 Everything is on a page of the **EscoEditor** row at the bottom of every
 marker's menu (keyboard only, like the rest of the editor), and the light

@@ -1,4 +1,4 @@
-EscoEditor.asi 4.4  -  more control for the Rockstar Editor
+EscoEditor.asi 4.5  -  more control for the Rockstar Editor
 ======================================================================
 (formerly EditorCamSpeed.asi - same plugin, new name)
 
@@ -9,6 +9,19 @@ menu, adds scene lights you place in the picture with a 3D gizmo - fixed in
 the world, on the camera, or riding along with a ped, a vehicle or a prop -
 and keeps the free camera speed keys. The editor's own camera path,
 transitions, shake and depth of field are never touched.
+
+WHAT CHANGED IN 4.5
+  - Lights in an export, whatever is driving it. The list handed to the game
+    was built in the replay director's tick and thrown away by the light
+    consumer when it was more than five seconds old. That holds up while a
+    clip plays in the editor, where both run every frame - but an export is
+    driven frame by frame by whatever is exporting, and the director tick is
+    not guaranteed to come round in between. One slow frame and everything
+    after it went out unlit. The consumer now builds the list itself whenever
+    what it has is stale or missing, from the clip's own lights and the replay
+    clock, and it no longer asks what mode the replay is in: having a clip
+    open is the only condition. The log counts them ("N built here because
+    nothing else had").
 
 WHAT CHANGED IN 4.4
   - Scene lights, and the time and weather, are in an export again - including
@@ -333,7 +346,7 @@ WHAT CHANGED IN 2.9
 
 CHECK YOU HAVE THIS VERSION
   The first line of EscoEditor.log (next to the .asi) must say
-  "EscoEditor 4.4".
+  "EscoEditor 4.5".
 
 INSTALL
   FiveM:          close FiveM, run Install.bat - or copy EscoEditor.asi

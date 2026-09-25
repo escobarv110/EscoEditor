@@ -1466,6 +1466,50 @@ namespace lights
 	// From the director hook: publish the camera and what to draw this frame.
 	volatile LONG g_heldCount = 0;   // frames an attached light held the last place it saw its parent
 
+	// The lights of the open clip as the game wants them: world positions,
+	// types and flags. It lives here, and not inside the director hook, so the
+	// light consumer can build it itself when nothing else has - which is what
+	// an export needs, where the director tick is not guaranteed to come round
+	// between the frames being encoded. `fs` may be null: the flares need a
+	// camera, and an export has no ReShade pass to draw them in.
+	void buildDraw(const Ctx& c, Draw& d, FlareSet* fs)
+	{
+		d.count = 0;
+		d.at = GetTickCount64();
+		if (fs)
+		{
+			fs->count = 0;
+			fs->at = d.at;
+			fs->fov = c.cam.fov;
+			fs->nearClip = c.cam.nearClip;
+			fs->farClip = c.cam.farClip;
+			fs->time = c.now * 0.001f;   // the clip's own clock: a flicker falls on the same frame every playback
+		}
+		Lock lk;
+		if (!g_cur) return;
+		for (int i = 0; i < g_cur->count; ++i)
+		{
+			Light& L = g_cur->l[i];
+			resolveParent(L, c);        // an entity needs no camera; A_CAMERA keeps its last frame without one
+			if (!L.enabled || d.count >= kMaxLights) continue;
+			Params p = evalLight(L, c.now);
+			if (L.at.mode != A_NONE)
+			{
+				// The replay only keeps entities alive around the camera, so from
+				// a distance the car a light follows winks in and out of the pools.
+				// Dropping the light on those frames is what made it - and its
+				// flare - flicker. It holds the last place it saw instead.
+				if (!L.parentOk && !L.frameKnown) continue;   // never seen it at all
+				if (!L.parentOk) InterlockedIncrement(&g_heldCount);
+				p = toWorld(L.parent, p);
+			}
+			DrawItem& it = d.it[d.count++];
+			it.id = L.id; it.type = L.type; it.flags = L.flags;
+			it.p = p;
+			if (fs && c.valid && fs->count < kMaxFlares && flareOf(L, p, c.cam, fs->it[fs->count])) ++fs->count;
+		}
+	}
+
 	void onDirectorFrame(uint8_t* dir)
 	{
 		if (!g_ready || !dir) return;
@@ -1504,41 +1548,9 @@ namespace lights
 		}
 
 		Draw d;
-		d.count = 0;
-		d.at = c.at;
 		FlareSet fs;
-		fs.count = 0;
-		{
-			Lock lk;
-			if (g_cur)
-				for (int i = 0; i < g_cur->count; ++i)
-				{
-					Light& L = g_cur->l[i];
-					resolveParent(L, c);
-					if (!L.enabled || d.count >= kMaxLights) continue;
-					Params p = evalLight(L, c.now);
-					if (L.at.mode != A_NONE)
-					{
-						// The replay only keeps entities alive around the camera, so from
-						// a distance the car a light follows winks in and out of the pools.
-						// Dropping the light on those frames is what made it - and its
-						// flare - flicker. It holds the last place it saw instead.
-						if (!L.parentOk && !L.frameKnown) continue;   // never seen it at all
-						if (!L.parentOk) InterlockedIncrement(&g_heldCount);
-						p = toWorld(L.parent, p);
-					}
-					DrawItem& it = d.it[d.count++];
-					it.id = L.id; it.type = L.type; it.flags = L.flags;
-					it.p = p;
-					if (c.valid && fs.count < kMaxFlares && flareOf(L, p, c.cam, fs.it[fs.count])) ++fs.count;
-				}
-		}
+		buildDraw(c, d, &fs);
 		seqWrite(g_draw, g_drawSeq, d);
-		fs.at = c.at;
-		fs.fov = c.cam.fov;
-		fs.nearClip = c.cam.nearClip;
-		fs.farClip = c.cam.farClip;
-		fs.time = c.now * 0.001f;   // the clip's own clock: a flicker falls on the same frame every playback
 		seqWrite(g_flares, g_flareSeq, fs);
 		if (g_wantScene && c.valid) gatherScene(c.cam, c.at);
 	}
@@ -1566,7 +1578,7 @@ namespace lights
 	// will take no more, or our own snapshot went stale. Each second of this
 	// is counted, and a line is written whenever the picture changes - which
 	// says which of the three it is instead of leaving it to guesswork.
-	struct Tally { int calls, injects, wanted, got, refused, stale; unsigned listLo, listHi; };
+	struct Tally { int calls, injects, wanted, got, refused, stale, rebuilt; unsigned listLo, listHi; };
 	Tally g_tally = {};
 	ULONGLONG g_tallyAt = 0;
 	int g_tallyLogs = 0;
@@ -1589,8 +1601,8 @@ namespace lights
 		if (same || g_tallyLogs >= 30) return;
 		++g_tallyLogs;
 		const int frames = (int)InterlockedExchange(&g_presented, 0);
-		logf("lights: in the last two seconds the game drew %d frame(s) and asked for its lights %d time(s); %d of %d went in, %d refused (the list was full), %d skipped as stale; the game's own list held %u to %u. %s",
-			frames, t.calls, t.got, t.wanted, t.refused, t.stale,
+		logf("lights: in the last two seconds the game drew %d frame(s) and asked for its lights %d time(s); %d of %d went in, %d refused (the list was full), %d skipped as stale, %d built here because nothing else had; the game's own list held %u to %u. %s",
+			frames, t.calls, t.got, t.wanted, t.refused, t.stale, t.rebuilt,
 			t.listLo == 0xFFFFFFFFu ? 0u : t.listLo, t.listHi,
 			t.refused ? "A refusal is the game's light list being full."
 			          : t.stale ? "Stale means the replay director did not run that frame."
@@ -1644,10 +1656,24 @@ namespace lights
 	void inject()
 	{
 		++g_tally.calls;
-		const Draw d = seqRead(g_draw, g_drawSeq);
-		// 5 s, not less: one frame of a high-quality export can take seconds.
+		Draw d = seqRead(g_draw, g_drawSeq);
+		// An export is driven frame by frame by whatever is exporting, and the
+		// replay director's tick - which is what publishes the snapshot above -
+		// is not guaranteed to come round between those frames. So rather than
+		// hand the game a stale list, or none at all, build it here from the
+		// clip's own lights and the replay clock. No camera: only flares want one.
+		if (d.count <= 0 || GetTickCount64() - d.at > 1000)
+		{
+			Ctx here = {};
+			here.valid = false;
+			here.now = game::replayTimeMs();
+			here.marker = -1.0f;
+			here.markerIndex = -1;
+			here.at = GetTickCount64();
+			buildDraw(here, d, nullptr);
+			if (d.count > 0) ++g_tally.rebuilt;
+		}
 		if (d.count <= 0) return;
-		if (GetTickCount64() - d.at > 5000) { ++g_tally.stale; return; }
 		const unsigned before = listCount();
 		if (before < g_tally.listLo) g_tally.listLo = before;
 		if (before > g_tally.listHi) g_tally.listHi = before;
@@ -1667,12 +1693,13 @@ namespace lights
 
 	void __fastcall hkConsumer()
 	{
-		// Any replay activity, not just the marker editor being open. An export
-		// does not run in the editor: the game's own Export button opens the
-		// playback as BAKE, and Rockstar Editor Plus's exporter rewrites that to
-		// a full-project preview so it can capture the frames itself. Gating on
-		// "the editor is open" left the lights out of both.
-		if (g_ready && replayMode() != 0) { inject(); tallyLine(GetTickCount64()); }
+		// No mode test at all. A clip's lights exist only while that clip is
+		// open, so having one IS the gate - and an export runs in whatever mode
+		// the thing driving it chose (the game's own Export button opens the
+		// playback as BAKE; Rockstar Editor Plus rewrites that to a full-project
+		// preview so it can capture the frames itself). Asking about the mode is
+		// how the lights kept missing from exports.
+		if (g_ready && g_cur) { inject(); tallyLine(GetTickCount64()); }
 		origConsumer();
 	}
 
