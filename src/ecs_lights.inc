@@ -121,6 +121,83 @@ namespace lights
 		if (!(f.flickerHz   >= 0.05f)) f.flickerHz = 6.0f;
 	}
 
+	// A light that flashes: how, how fast, how far down it goes, and where in
+	// its beat it starts. One per light, like the flare. It runs on the clip's
+	// own clock, so a frame always looks the same and an export matches the
+	// playback.
+	enum { FX_OFF = 0, FX_BLINK, FX_STROBE, FX_PULSE, FX_FLICKER, FX_DOUBLE, FX_COUNT };
+	struct Flash
+	{
+		float mode;                    // FX_*
+		float rate;                    // flashes a second
+		float depth;                   // 1 = fully off between flashes, 0.5 = half as bright
+		float duty;                    // Blink: the share of each beat it is on
+		float phase;                   // 0..1: where in the beat it starts, to put two lights out of step
+	};
+	constexpr int kFlashFloats = 5;
+	static_assert(sizeof(Flash) == kFlashFloats * sizeof(float), "Flash is a flat run of floats");
+
+	const char* flashName(int m)
+	{
+		switch (m)
+		{
+		case FX_BLINK:   return "Blink";
+		case FX_STROBE:  return "Strobe";
+		case FX_PULSE:   return "Pulse";
+		case FX_FLICKER: return "Flicker";
+		case FX_DOUBLE:  return "Double flash";
+		default:         return "Off";
+		}
+	}
+
+	void flashFill(Flash& f)
+	{
+		if (!(f.rate >= 0.05f && f.rate <= 30.0f)) f.rate = 2.0f;
+		if (!(f.depth >= 0.0f && f.depth <= 1.0f)) f.depth = 1.0f;
+		if (!(f.duty > 0.0f && f.duty < 1.0f))     f.duty = 0.5f;
+		if (!(f.phase >= 0.0f && f.phase <= 1.0f)) f.phase = 0.0f;
+	}
+
+	inline float flashHash(uint32_t n)
+	{
+		n = (n << 13) ^ n;
+		n = n * (n * n * 15731u + 789221u) + 1376312589u;
+		return (float)(n & 0x7FFFFFFFu) / 2147483647.0f;
+	}
+
+	// How bright the light is at `sec` seconds, 0..1 (1 = as keyed).
+	float flashLevel(const Flash& f, float sec, uint32_t id)
+	{
+		const int mode = (int)(f.mode + 0.5f);
+		if (mode <= FX_OFF || mode >= FX_COUNT) return 1.0f;
+		const float rate = f.rate >= 0.05f ? f.rate : 2.0f;
+		const float beat = sec * rate + f.phase;
+		const float x = beat - floorf(beat);
+		float b = 1.0f;
+		switch (mode)
+		{
+		case FX_BLINK:  b = x < f.duty ? 1.0f : 0.0f; break;
+		case FX_STROBE: { const float on = 0.035f * rate; b = x < (on < 0.5f ? on : 0.5f) ? 1.0f : 0.0f; break; }
+		case FX_PULSE:  b = 0.5f - 0.5f * cosf(6.2831853f * x); break;
+		case FX_DOUBLE: b = (x < 0.08f || (x >= 0.16f && x < 0.24f)) ? 1.0f : 0.0f; break;
+		case FX_FLICKER:
+		{
+			// Smooth noise, a value a beat, its own for each light: a flame, a
+			// failing bulb. Shaped so it is mostly bright with sudden dips.
+			const float i = floorf(beat), u = beat - i;
+			const uint32_t k = (uint32_t)(int32_t)i + id * 7919u;
+			const float a = flashHash(k), c = flashHash(k + 1u);
+			const float w = u * u * (3.0f - 2.0f * u);
+			const float n = a + (c - a) * w;
+			b = 1.0f - (1.0f - n) * (1.0f - n) * 1.3f;
+			if (b < 0.0f) b = 0.0f;
+			break;
+		}
+		}
+		const float depth = f.depth >= 0.0f && f.depth <= 1.0f ? f.depth : 1.0f;
+		return 1.0f - depth * (1.0f - b);
+	}
+
 	struct Light
 	{
 		uint32_t id;
@@ -133,6 +210,7 @@ namespace lights
 		KeyFrame keys[kMaxKeys];       // sorted by time
 		Attach   at;                   // what it follows: pos and dir are then in that frame
 		Flare    fl;                   // its lens flare
+		Flash    fx;                   // and whether it flashes
 		// the game thread's view, each frame (not saved)
 		void*    ent;                  // the entity it was found on
 		int      entSlot;              // and the pool slot it was in (not saved)
@@ -1575,8 +1653,19 @@ namespace lights
 	// an export needs, where the director tick is not guaranteed to come round
 	// between the frames being encoded. `fs` may be null: the flares need a
 	// camera, and an export has no ReShade pass to draw them in.
+	// The clip's clock stands still while it is paused. Then, with the light
+	// editor open, a flashing light is shown lit, so it can be placed and seen
+	// - it flashes again as soon as the clip plays, and always in an export.
+	volatile float     g_flashLastNow = -1.0f;
+	volatile ULONGLONG g_flashMovedAt = 0;
+
 	void buildDraw(const Ctx& c, Draw& d, FlareSet* fs)
 	{
+		{
+			const ULONGLONG now = GetTickCount64();
+			if (c.now != g_flashLastNow) { g_flashLastNow = c.now; g_flashMovedAt = now; }
+		}
+		const bool holdFlash = g_uiOpen && GetTickCount64() - g_flashMovedAt > 300;
 		d.count = 0;
 		d.at = GetTickCount64();
 		if (fs)
@@ -1605,6 +1694,13 @@ namespace lights
 				if (!L.parentOk && !L.frameKnown) continue;   // never seen it at all
 				if (!L.parentOk) InterlockedIncrement(&g_heldCount);
 				p = toWorld(L.parent, p);
+			}
+			if (L.fx.mode > 0.5f && !holdFlash)
+			{
+				const float k = flashLevel(L.fx, c.now * 0.001f, L.id);
+				if (k <= 0.002f) continue;               // dark this frame: nothing to hand the game
+				p.intensity *= k;
+				p.volInt *= k;
 			}
 			DrawItem& it = d.it[d.count++];
 			it.id = L.id; it.type = L.type; it.flags = L.flags;
@@ -1853,6 +1949,11 @@ namespace lights
 					o.append(b, (size_t)n);
 					o.push_back('\n');
 				}
+				if (L.fx.mode > 0.5f)
+				{
+					snprintf(b, sizeof(b), "x %.9g %.9g %.9g %.9g %.9g\n", L.fx.mode, L.fx.rate, L.fx.depth, L.fx.duty, L.fx.phase);
+					o += b;
+				}
 				appendParams(o, "b", nullptr, L.base);
 				for (int k = 0; k < L.nkeys; ++k) appendParams(o, "k", &L.keys[k].t, L.keys[k].p);
 			}
@@ -2015,6 +2116,17 @@ namespace lights
 				{
 					memcpy(&L->fl, g, (size_t)got * sizeof(float));
 					flareFill(L->fl);
+				}
+				continue;
+			}
+			if (L && s[0] == 'x' && s[1] == ' ')          // 4.12: the flash
+			{
+				float g[kFlashFloats] = {};
+				if (parseSome(s + 2, g, kFlashFloats) >= 2)
+				{
+					memcpy(&L->fx, g, sizeof(g));
+					if (!(L->fx.mode >= 0.0f && L->fx.mode < (float)FX_COUNT)) L->fx.mode = 0.0f;
+					flashFill(L->fx);
 				}
 				continue;
 			}

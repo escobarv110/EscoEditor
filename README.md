@@ -9,7 +9,7 @@ place in the picture with a 3D gizmo and key over the clip**.
 No ScriptHookV, no Rockstar Editor+, no Menyoo. One `.asi`, and it runs
 alongside Rockstar Editor+ if you use that too.
 
-<sub>Version 4.11 · GTA V b3258–b3751 and singleplayer b3407 · MIT</sub>
+<sub>Version 4.12 · GTA V b3258–b3751 and singleplayer b3407 · MIT</sub>
 
 ---
 
@@ -65,6 +65,9 @@ alongside Rockstar Editor+ if you use that too.
 * **Lens flares and a light leak** per light (through ReShade — see below):
   glow, anamorphic streak, star, ghosts, halo, colour fringe, leak, flicker,
   with presets.
+* **Flash** per light: blink, strobe, pulse, flicker or double flash, with its
+  speed, depth and an offset so two lights take turns — on the clip's own
+  clock, so the export flashes on the same frames as the playback.
 * Switches per light: shadows, sharper shadow, volumetric, no reflections, lit
   in a blackout, and **From the sun** — the engine works the light's colour and
   brightness out from the sun at the clip's hour, so it follows sunrise, noon

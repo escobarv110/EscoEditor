@@ -820,6 +820,54 @@ int main(int argc, char** argv)
         }
     }
 
+    // ---- a light that flashes ------------------------------------------------------
+    {
+        namespace lt = lights;
+        lt::Flash f = {};
+        f.mode = (float)lt::FX_BLINK; f.rate = 2.0f; f.depth = 1.0f; f.duty = 0.5f; f.phase = 0.0f;
+        CHECK(lt::flashLevel(f, 0.10f, 1) == 1.0f && lt::flashLevel(f, 0.30f, 1) == 0.0f && lt::flashLevel(f, 0.60f, 1) == 1.0f,
+              "Blink at 2 a second: on for the first quarter second, off for the next, on again");
+        f.depth = 0.5f;
+        CHECK(fabsf(lt::flashLevel(f, 0.30f, 1) - 0.5f) < 1e-5f, "depth 0.5: half as bright between blinks, not off");
+        f.depth = 1.0f; f.phase = 0.5f;
+        CHECK(lt::flashLevel(f, 0.10f, 1) == 0.0f, "an offset of half a beat takes turns with a light at 0");
+        f.phase = 0.0f; f.mode = (float)lt::FX_PULSE;
+        CHECK(lt::flashLevel(f, 0.0f, 1) < 1e-5f && fabsf(lt::flashLevel(f, 0.25f, 1) - 1.0f) < 1e-5f, "Pulse: dark at the start of a beat, full in its middle");
+        f.mode = (float)lt::FX_DOUBLE;
+        CHECK(lt::flashLevel(f, 0.02f, 1) == 1.0f && lt::flashLevel(f, 0.06f, 1) == 0.0f && lt::flashLevel(f, 0.10f, 1) == 1.0f && lt::flashLevel(f, 0.30f, 1) == 0.0f,
+              "Double flash: two quick flashes, then a pause");
+        f.mode = (float)lt::FX_STROBE; f.rate = 1.0f;
+        CHECK(lt::flashLevel(f, 0.01f, 1) == 1.0f && lt::flashLevel(f, 0.10f, 1) == 0.0f, "Strobe: a short hard flash each beat");
+        f.mode = (float)lt::FX_FLICKER; f.rate = 8.0f;
+        bool inRange = true, varies = false, same = true;
+        float prev = lt::flashLevel(f, 0.0f, 7);
+        for (int i = 1; i < 400; ++i)
+        {
+            const float t = i * 0.0125f, v = lt::flashLevel(f, t, 7);
+            if (!(v >= 0.0f && v <= 1.0f)) inRange = false;
+            if (fabsf(v - prev) > 0.05f) varies = true;
+            if (v != lt::flashLevel(f, t, 7)) same = false;
+            prev = v;
+        }
+        CHECK(inRange && varies && same && lt::flashLevel(f, 1.3f, 7) != lt::flashLevel(f, 1.3f, 8),
+              "Flicker wavers, stays in 0..1, is the same on every playback, and two lights flicker out of step");
+        f.mode = 0.0f;
+        CHECK(lt::flashLevel(f, 0.3f, 1) == 1.0f, "Off: the light as keyed");
+
+        lt::Lock lk;
+        lt::clearStore();
+        lt::LightSet* fs = lt::findSet("FlashProj", 0, true);
+        const int li = lt::addLight(*fs, lt::T_POINT, nullptr);
+        fs->l[li].fx.mode = (float)lt::FX_DOUBLE; fs->l[li].fx.rate = 1.5f; fs->l[li].fx.depth = 0.8f; fs->l[li].fx.duty = 0.3f; fs->l[li].fx.phase = 0.25f;
+        const std::string txt = lt::serialize();
+        lt::clearStore();
+        lt::parse(txt);
+        lt::LightSet* fb = lt::findSet("FlashProj", 0, false);
+        CHECK(fb && fb->count == 1 && fb->l[0].fx.mode == (float)lt::FX_DOUBLE && fb->l[0].fx.rate == 1.5f && fb->l[0].fx.depth == 0.8f &&
+              fb->l[0].fx.duty == 0.3f && fb->l[0].fx.phase == 0.25f, "a light's flash is saved and read back");
+        lt::clearStore();
+    }
+
     // ---- time and weather keyed over a clip ---------------------------------
     {
         lights::SceneTrack sky = {};

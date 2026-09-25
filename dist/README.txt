@@ -1,4 +1,4 @@
-EscoEditor.asi 4.11  -  more control for the Rockstar Editor
+EscoEditor.asi 4.12  -  more control for the Rockstar Editor
 ======================================================================
 (formerly EditorCamSpeed.asi - same plugin, new name)
 
@@ -9,6 +9,19 @@ menu, adds scene lights you place in the picture with a 3D gizmo - fixed in
 the world, on the camera, or riding along with a ped, a vehicle or a prop -
 and keeps the free camera speed keys. The editor's own camera path,
 transitions, shake and depth of field are never touched.
+
+WHAT CHANGED IN 4.12
+  - Lights can flash. The light editor's new Flash section: Blink, Strobe,
+    Pulse, Flicker (a flame, a failing bulb) or Double flash (an emergency
+    light), with its speed, how far down it goes between flashes, Blink's on
+    time, and an offset - two lights at the same speed with offsets 0 and 0.5
+    take turns. The flare flashes with the light. It runs on the clip's own
+    clock, so every playback and the export flash on the same frames; while
+    the clip is paused with the editor open the light stays lit so it can be
+    placed, and a dot next to Flash shows the beat.
+  - The light editor has a mouse pointer again: it draws its own crosshair.
+    ReShade only draws its cursor while ReShade's own menu is open, and the
+    game's is hidden while the editor holds the mouse, so there was none.
 
 WHAT CHANGED IN 4.11
   - ENB is its own depth of field. The game's Focus row (Default / Custom /
@@ -442,7 +455,7 @@ WHAT CHANGED IN 2.9
 
 CHECK YOU HAVE THIS VERSION
   The first line of EscoEditor.log (next to the .asi) must say
-  "EscoEditor 4.11".
+  "EscoEditor 4.12".
 
 INSTALL
   FiveM:          close FiveM, run Install.bat - or copy EscoEditor.asi

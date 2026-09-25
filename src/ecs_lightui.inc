@@ -1237,6 +1237,57 @@ namespace lightui
 		flagBox("Lit in a blackout", L, lights::LF_BLACKOUT, "Keeps the light on while the game has the city lights switched off.");
 		flagBox("From the sun", L, lights::LF_SUN, "The engine works this light's colour and brightness out from the sun at the clip's hour, so it follows sunrise, noon and dusk by itself - a little sun of its own. Time of Day on the EscoEditor menu drives it.");
 
+		// --- flashing
+		ImGui::SeparatorText("Flash");
+		{
+			bool fch = false;
+			int fm = (int)(L.fx.mode + 0.5f);
+			if (fm < 0 || fm >= lights::FX_COUNT) fm = 0;
+			ImGui::SetNextItemWidth(160.0f);
+			if (ImGui::BeginCombo("Flash", lights::flashName(fm)))
+			{
+				for (int m = 0; m < lights::FX_COUNT; ++m)
+					if (ImGui::Selectable(lights::flashName(m), m == fm))
+					{
+						if (fm == lights::FX_OFF && m != lights::FX_OFF) lights::flashFill(L.fx);
+						L.fx.mode = (float)m;
+						fm = m;
+						fch = true;
+					}
+				ImGui::EndCombo();
+			}
+			tip("Makes the light flash - it and its flare:\n"
+				"Blink - on, then off.  Strobe - a short hard flash each beat.  Pulse - fades up and down.\n"
+				"Flicker - a flame or a failing bulb.  Double flash - two quick flashes, then a pause, like an emergency light.\n"
+				"It follows the clip's own clock, so every playback and the export flash on the same frames. "
+				"While the clip is paused and this editor is open the light stays lit, so it can be placed; press play to see it flash.");
+			if (fm != lights::FX_OFF)
+			{
+				lights::flashFill(L.fx);
+				// a live preview of the beat, on the wall clock
+				const float lv = lights::flashLevel(L.fx, (float)(GetTickCount64() % 3600000ULL) * 0.001f, L.id);
+				ImGui::SameLine();
+				const ImVec2 at = ImGui::GetCursorScreenPos();
+				const float r = ImGui::GetFrameHeight() * 0.35f;
+				const int g = (int)(40 + 215 * lv);
+				ImGui::GetWindowDrawList()->AddCircleFilled(ImVec2(at.x + r + 2.0f, at.y + ImGui::GetFrameHeight() * 0.5f), r, IM_COL32(g, g, (int)(g * 0.8f), 255));
+				ImGui::Dummy(ImVec2(r * 2.0f + 4.0f, ImGui::GetFrameHeight()));
+				tip("The beat, as it will flash.");
+				if (ImGui::DragFloat("Flash speed", &L.fx.rate, 0.02f, 0.05f, 30.0f, "%.2f a second", ImGuiSliderFlags_Logarithmic)) fch = true;
+				tip("How many flashes a second (Flicker: how fast it wavers).");
+				if (ImGui::DragFloat("Flash depth", &L.fx.depth, 0.01f, 0.0f, 1.0f, "%.2f")) fch = true;
+				tip("How far down it goes between flashes: 1 is fully off, 0.5 half as bright, 0 no flashing at all.");
+				if (fm == lights::FX_BLINK)
+				{
+					if (ImGui::DragFloat("On time", &L.fx.duty, 0.01f, 0.05f, 0.95f, "%.2f")) fch = true;
+					tip("The share of each beat the light is on: 0.5 on half the time, 0.1 a short blink.");
+				}
+				if (ImGui::DragFloat("Flash offset", &L.fx.phase, 0.01f, 0.0f, 1.0f, "%.2f")) fch = true;
+				tip("Where in its beat it starts. Two lights at the same speed with offsets 0 and 0.5 take turns - red and blue, one after the other.");
+			}
+			if (fch) lights::markDirty();
+		}
+
 		// --- the lens flare, drawn by EscoFlare through ReShade
 		ImGui::SeparatorText("Flare (lens)");
 		bool fon = L.fl.on > 0.5f;
@@ -1392,6 +1443,30 @@ namespace lightui
 	}
 
 	// reshade_overlay: every frame, on ReShade's render thread.
+	// The mouse, drawn by the editor itself. ReShade only draws ImGui's cursor
+	// while its own menu is open and takes the game's away, so with the light
+	// editor alone there was none. A crosshair: white with a dark edge, so it
+	// shows on a lit wall and in a night sky alike, with a dot at the point
+	// that counts.
+	void drawCrosshair(const ImGuiIO& io)
+	{
+		if (!ImGui::IsMousePosValid(&io.MousePos)) return;
+		ImGui::SetMouseCursor(ImGuiMouseCursor_None);    // never two cursors
+		ImDrawList* dl = ImGui::GetForegroundDrawList();
+		const float k = io.DisplaySize.y > 0.0f ? io.DisplaySize.y / 1080.0f : 1.0f;
+		const ImVec2 m = io.MousePos;
+		const float gap = 3.0f * k, len = 9.0f * k;
+		const ImU32 dark = IM_COL32(0, 0, 0, 200), light = IM_COL32(255, 255, 255, 255);
+		auto arm = [&](float dx, float dy) {
+			const ImVec2 a(m.x + dx * gap, m.y + dy * gap), b(m.x + dx * (gap + len), m.y + dy * (gap + len));
+			dl->AddLine(a, b, dark, 3.5f * k);
+			dl->AddLine(a, b, light, 1.5f * k);
+		};
+		arm(1, 0); arm(-1, 0); arm(0, 1); arm(0, -1);
+		dl->AddCircleFilled(m, 2.2f * k, dark);
+		dl->AddCircleFilled(m, 1.2f * k, light);
+	}
+
 	void onOverlay(reshade::api::effect_runtime* rt)
 	{
 		ImGuiIO& io = ImGui::GetIO();
@@ -1543,6 +1618,7 @@ namespace lightui
 			}
 		}
 		lights::g_uiOpen = g_open;
+		if (g_open) drawCrosshair(io);
 		if (!g_open) closeState();
 	}
 
