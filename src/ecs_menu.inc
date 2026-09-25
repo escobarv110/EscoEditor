@@ -90,7 +90,7 @@ namespace menu
 	enum Page { PAGE_CLOSED = 0, PAGE_CAMSPEED, PAGE_CLIPBOARD, PAGE_SCENE, PAGE_LIGHTS, PAGE_COUNT };
 	enum Row  { R_HEADER = 0, R_SPEED, R_VSPEED, R_LOOK, R_FREE,
 	            R_FROM, R_TO, R_COPY, R_CUT, R_PASTE, R_SPDALL, R_TIME, R_WEATHER,
-	            R_DCOPY, R_DPASTE, R_DALL, R_ENB, R_ENBO0, R_ENBO_LAST = R_ENBO0 + 11, R_LOPEN, R_LKEY, R_LALL, R_COUNT };
+	            R_DCOPY, R_DPASTE, R_DALL, R_ENB, R_ENBSCOPE, R_ENBO0, R_ENBO_LAST = R_ENBO0 + 11, R_LOPEN, R_LKEY, R_LALL, R_COUNT };
 
 	int g_kind = K_MARKER;   // the column our rows are in right now
 	int g_page = PAGE_CAMSPEED;
@@ -132,6 +132,7 @@ namespace menu
 			// has room for below the game's own rows; the rest scroll in
 			if (g_cfg.enbDof && enbdof::s_ready)
 			{
+				s_rows[s_shown++] = R_ENBSCOPE;         // this keyframe, or all of them
 				enbdof::buildList();              // this keyframe's: Manual and Auto show different rows
 				const int count = enbdof::listCount();
 				int room = kColumnCapacity - (g_first > 0 ? g_first : 0) - s_shown;
@@ -233,6 +234,7 @@ namespace menu
 		case R_DPASTE:  return "Paste DOF";
 		case R_DALL:    return "DOF To All";
 		case R_ENB:     return "ENB";
+		case R_ENBSCOPE: return "Apply To";
 		case R_LOPEN:   return "Open Light Editor";
 		case R_LKEY:    return "Light Editor Key";
 		case R_LALL:    return "Lights In Every Clip";
@@ -259,7 +261,8 @@ namespace menu
 		case R_WEATHER: return scene::weatherName();
 		case R_LKEY:    return lights::g_capture ? "Press a key" : keyName(g_cfg.keyLights, buf, cap);
 		case R_LALL:    return g_cfg.lightsAll ? "On" : "Off";
-		case R_ENB:     return !enbdof::s_found ? "No ENB" : !g_cfg.enbDof ? "Off" : g_cfg.enbAll ? "All Keyframes" : "Per Keyframe";
+		case R_ENB:     return !enbdof::s_found ? "No ENB" : g_cfg.enbDof ? "On" : "Off";
+		case R_ENBSCOPE: return g_cfg.enbAll ? "All Keyframes" : "This Keyframe";
 		default:
 			if (isEnbOpt(r))
 			{
@@ -293,7 +296,8 @@ namespace menu
 		case R_WEATHER: return scene::kWeatherCount + 1;
 		case R_LKEY:    return lights::kCycleCount;
 		case R_LALL:    return 2;
-		case R_ENB:     return 3;
+		case R_ENB:     return 2;
+		case R_ENBSCOPE: return 2;
 		default:        return isEnbOpt(r) ? 100 : -1;
 		}
 	}
@@ -331,16 +335,11 @@ namespace menu
 		case R_DPASTE:  snprintf(buf, sizeof(buf), "Paste the copied DOF here. %s", dof::g_last); return buf;
 		case R_DALL:    snprintf(buf, sizeof(buf), "Put this DOF on every keyframe. %s", dof::g_last); return buf;
 		case R_ENB:
-			if (!enbdof::s_found) return "No ENB in the game. With ENB (NVE's is fine) this row hands it the depth of field of every keyframe.";
-			if (!enbdof::s_ready) return "ENB found - waiting for its depth of field shader to load (EnableDepthOfField on in ENB).";
-			if (!g_cfg.enbDof) return "Left/right: Per Keyframe - the rows below change this keyframe; All Keyframes - every change goes to every keyframe of the clip.";
-			if (g_rePlus)
-				return g_cfg.enbAll
-					? "All Keyframes: every change below goes to every keyframe. Rockstar Editor+ renders keep ENB's blur; leave RE+'s own lens depth of field off, or both blur."
-					: "Per Keyframe: the rows below change this keyframe. Rockstar Editor+ renders keep ENB's blur; leave RE+'s own lens depth of field off, or both blur.";
-			return g_cfg.enbAll
-				? "All Keyframes: every change below goes to every keyframe of the clip. Left/right: Off, Per Keyframe. Set the game's Focus to None so its own blur does not add to ENB's."
-				: "Per Keyframe: the rows below change this keyframe, blending to the next. Left/right: All Keyframes, Off. Set the game's Focus to None so its own blur does not add to ENB's.";
+			if (!enbdof::s_found) return "No ENB found in the game.";
+			if (!enbdof::s_ready) return "ENB found. Turn on its depth of field (EnableDepthOfField).";
+			return g_rePlus ? "ENB depth of field. Set the game's Focus to None, and keep RE+'s own DOF off."
+							: "ENB depth of field. Set the game's Focus to None.";
+		case R_ENBSCOPE: return "Change only this keyframe, or all keyframes at once.";
 		case R_LOPEN:
 			if (!lightui::g_imgui) return "Needs ReShade with add-on support: the light editor is a ReShade window.";
 			snprintf(buf, sizeof(buf), "Place lights with a 3D gizmo. %s opens and closes it too.", keyName(g_cfg.keyLights, s, sizeof(s)));
@@ -356,13 +355,13 @@ namespace menu
 				if (p < 0) return "";
 				bool own;
 				enbdof::valueHere(p, &own);
-				const int n = enbdof::listCount(), k = enbdof::g_scroll + (r - R_ENBO0) + 1;
+				const int n = enbdof::listCount();
 				const bool below = r == s_rows[s_shown - 1] && enbdof::g_scroll + enbShown() < n;
 				const bool above = r == R_ENBO0 && enbdof::g_scroll > 0;
-				snprintf(buf, sizeof(buf), "%s %s (%d of %d%s)", enbdof::hint(p),
-					g_cfg.enbAll ? "Left/right changes it on every keyframe; Enter puts the default back on all of them."
-					: own ? "This keyframe's own; Enter puts the default back." : "Left/right gives this keyframe its own. Hold to go faster.",
-					k, n, below ? " - down for more" : above ? " - up for more" : "");
+				snprintf(buf, sizeof(buf), "%s%s%s%s", enbdof::hint(p),
+					g_cfg.enbAll ? " (All Keyframes)" : "",
+					own ? " Enter: reset." : "",
+					below ? " Down: more." : above ? " Up: more." : "");
 				return buf;
 			}
 			return "";
@@ -419,15 +418,8 @@ namespace menu
 		case R_WEATHER: scene::stepWeather(delta); break;
 		case R_LKEY:    lights::stepShortcut(delta); break;
 		case R_LALL:    lights::toggleAllClips(); break;
-		case R_ENB:
-		{
-			// Off -> Per Keyframe -> All Keyframes, and back the other way
-			int st = !g_cfg.enbDof ? 0 : g_cfg.enbAll ? 2 : 1;
-			st = (st + (delta > 0 ? 1 : 2)) % 3;
-			if ((st != 0) != g_cfg.enbDof) enbdof::setOn(st != 0);
-			if (st != 0) enbdof::setAll(st == 2);
-			return true;                                   // the option rows come and go
-		}
+		case R_ENB:     enbdof::setOn(!g_cfg.enbDof); return true;     // the option rows come and go
+		case R_ENBSCOPE: enbdof::setAll(!g_cfg.enbAll); break;
 		default:
 			if (isEnbOpt(r))
 			{
@@ -471,6 +463,7 @@ namespace menu
 			return n >= 0;
 		}
 		case R_ENB:    enbdof::setOn(!g_cfg.enbDof); return true;
+		case R_ENBSCOPE: enbdof::setAll(!g_cfg.enbAll); return false;
 		case R_LOPEN:  if (lightui::g_imgui) InterlockedExchange(&lights::g_openReq, 1); return false;
 		case R_LKEY:   lights::beginCapture(lights::CAP_MENU); return false;
 		default:
@@ -599,6 +592,8 @@ namespace menu
 	{
 		const bool ours = ownsRow((int)idx);
 		const int  r = ours ? logicalAt((int)idx) : -1;
+		// the marker over the followed person shows while the Character row has the focus
+		enbdof::s_markerOn = ours && g_kind == K_DOF && isEnbOpt(r) && enbParam(r) == enbdof::V_TARGET;
 		// A pick begun on the Light Editor Key row ends when the focus leaves the row.
 		if (lights::g_capture && lights::g_captureSrc == lights::CAP_MENU && r != R_LKEY) lights::cancelCapture(lights::END_CANCELLED, "Cancelled");
 		if (ours) { if (r == R_LKEY) refreshRow((int)idx, r); else emitHelp(rowHelp(r)); return; }

@@ -83,10 +83,18 @@ namespace enbdof
 		// "Gameplay DOF Auto-focus", 1 its "Gameplay DOF Manual". Per keyframe
 		// this is Focus Mode Auto / Manual.
 		{ "TECHNIQUE",                                  K_ENUM,   0.0f,    2.0f, "Focus mode" },
+		// Not ENB's either: this keyframe's blur on (1) or off (0), blending
+		// from keyframe to keyframe like the rest (4.20). Never sent to ENB.
+		{ "",                                           K_FLOAT,  0.0f,    1.0f, "Keyframe DOF" },
 	};
 	enum { I_MOUSE = 0, I_NEAR = 1, I_AUTO_NEARPOWER = 2, I_DIST = 3, I_APERTURE = 4, I_NEARPOWER = 5, I_AUTO_APERTURE = 6,
 	       I_SEC_NEAR = 23, I_SEC_MANUAL = 24, I_SEC_AUTO = 25, I_SEC_BLUR = 26, I_SEC_QUALITY = 27, I_SEC_MISC = 28,
-	       I_FOCUS = 29 };
+	       I_FOCUS = 29, I_ENABLED = 30,
+	       // The five label slots after them hold the character a keyframe's
+	       // Player focus follows (4.20): its model hash in two halves, and where
+	       // it was when picked. They were never sent to ENB and still are not.
+	       I_TGT_HI = 23, I_TGT_LO = 24, I_TGT_X = 25, I_TGT_Y = 26, I_TGT_Z = 27 };
+	inline bool isOurs(int i) { return i == I_ENABLED; }
 	inline bool isLabel(int i) { return i >= I_SEC_NEAR && i <= I_SEC_MISC; }
 	// Focus Mode, per keyframe (EscoEditor's own - NVE always runs its Manual
 	// technique): the middle of the picture, a distance, or the player.
@@ -100,8 +108,8 @@ namespace enbdof
 	//                    percentage is converted for whichever runs.
 	//   Near Field Blur  Off, or how much: the near field switch and its power.
 	//   Anamorphic       Off, or how stretched: the switch and the stretch.
-	enum { V_APERTURE = 100, V_NEAR = 101, V_ANAMORPHIC = 102 };
-	inline bool isVirtual(int p) { return p >= V_APERTURE && p <= V_ANAMORPHIC; }
+	enum { V_APERTURE = 100, V_NEAR = 101, V_ANAMORPHIC = 102, V_TARGET = 103 };
+	inline bool isVirtual(int p) { return p >= V_APERTURE && p <= V_TARGET; }
 	inline float clampf(float v, float lo, float hi) { return v < lo ? lo : v > hi ? hi : v; }
 	// Aperture is THE blur amount: 0% no blur at all, 100% the most. NVE's own
 	// aperture is spent by about 0.1 - past that, everything behind the focus
@@ -476,7 +484,7 @@ namespace enbdof
 			int known = 0;
 			for (int i = 0; i < N; ++i)
 			{
-				s_known[i] = !isLabel(i) && readValue(s_file, s_cat, i, &s_base[i]);
+				s_known[i] = !isLabel(i) && !isOurs(i) && readValue(s_file, s_cat, i, &s_base[i]);
 				if (s_known[i]) ++known;
 				s_manual[i] = s_base[i];
 				s_havePushed[i] = false;
@@ -490,6 +498,8 @@ namespace enbdof
 			if (s_known[I_APERTURE]) s_manual[I_APERTURE] = manualFromPct(50.0f);
 			if (s_known[I_APERTURE] && s_known[I_AUTO_APERTURE]) s_manual[I_AUTO_APERTURE] = autoFromPct(pctManual(s_manual[I_APERTURE]));
 			if (s_known[I_NEARPOWER] && s_known[I_AUTO_NEARPOWER]) s_manual[I_AUTO_NEARPOWER] = s_manual[I_NEARPOWER];
+			s_known[I_ENABLED] = true;                // ours: this keyframe's blur on or off
+			s_base[I_ENABLED] = s_manual[I_ENABLED] = 1.0f;
 			readTechnique();
 			if (!s_known[I_FOCUS])
 			{
@@ -529,7 +539,7 @@ namespace enbdof
 	{
 		if (!s_ready || s_dirty) return;
 		for (int i = 0; i < N; ++i)
-			if (s_known[i] && !(i == I_FOCUS && s_focusFromIni)) readValue(s_file, s_cat, i, &s_base[i]);
+			if (s_known[i] && !isOurs(i) && !(i == I_FOCUS && s_focusFromIni)) readValue(s_file, s_cat, i, &s_base[i]);
 		if (s_focusFromIni) s_base[I_FOCUS] = techAuto() ? 0.0f : 1.0f;
 	}
 
@@ -739,11 +749,106 @@ namespace enbdof
 		return true;
 	}
 
-	// Every frame on the game thread while the ENB option is on.
-	void trackPlayer()
+	// The people in view, left to right on screen - the order the Character
+	// row steps through them in.
+	struct Person { void* ped; float chest[3]; float sx; float z; };
+	int s_peopleCount = 0;
+
+	int peopleOnScreen(const lights::Cam& cam, Person* out, int cap)
+	{
+		lights::PoolView v;
+		if (!lights::poolView(lights::E_PED, v) || v.size <= 0) return 0;
+		int n = 0;
+		for (int i = 0; i < v.size && n < cap; ++i)
+		{
+			void* e = lights::slotAt(v, i);
+			if (!e) continue;
+			Person p;
+			if (!chestOf(e, cam, &p.z, p.chest) || p.z < 0.3f || p.z > 150.0f) continue;
+			const float d[3] = { p.chest[0] - cam.pos[0], p.chest[1] - cam.pos[1], p.chest[2] - cam.pos[2] };
+			p.sx = (d[0] * cam.right[0] + d[1] * cam.right[1] + d[2] * cam.right[2]) / p.z;
+			const float sy = (d[0] * cam.up[0] + d[1] * cam.up[1] + d[2] * cam.up[2]) / p.z;
+			if (fabsf(p.sx) > 2.0f || fabsf(sy) > 1.2f) continue;            // off the picture
+			p.ped = e;
+			int at = n++;
+			while (at > 0 && out[at - 1].sx > p.sx) { out[at] = out[at - 1]; --at; }
+			out[at] = p;
+		}
+		return n;
+	}
+
+	// A picked character is its model hash (two 16-bit halves: a float holds
+	// each exactly) and where it was. 0/1 left in those slots by 4.9's section
+	// switches is not a pick.
+	inline uint32_t modelFrom(float hi, float lo)
+	{
+		if (!(hi >= 0.0f && hi < 65536.0f && lo >= 0.0f && lo < 65536.0f)) return 0;
+		const uint32_t m = ((uint32_t)hi << 16) | (uint32_t)lo;
+		return m > 0x10001u ? m : 0;
+	}
+	inline void modelTo(uint32_t m, float* hi, float* lo) { *hi = (float)(m >> 16); *lo = (float)(m & 0xFFFFu); }
+
+	void*    s_tgtPed = nullptr;               // the picked character, as last found
+	uint32_t s_tgtModel = 0;
+	float    s_tgtPick[3] = {};                // where it was picked: a new pick starts the search there
+	float    s_tgtLast[3] = {};                // where it was last seen
+	volatile float     s_markPos[3] = {};      // the followed character's chest, for the marker
+	volatile ULONGLONG s_markAt = 0;
+	volatile bool      s_markerOn = false;     // the menu's focus is on the Character row
+
+	void publishFollowed(const float* at, float z)
+	{
+		if (z >= 0.3f) { s_playerMetres = z; s_playerAt = GetTickCount64(); }
+		for (int k = 0; k < 3; ++k) s_markPos[k] = at[k];
+		s_markAt = GetTickCount64();
+	}
+
+	// Every frame on the game thread while the ENB option is on. `want` is
+	// what the keyframes ask for at the playhead, the pick included.
+	void trackPlayer(const float* want)
 	{
 		const lights::Ctx c = lights::ctx();
 		if (!c.valid || GetTickCount64() - c.at > 500) return;
+
+		// A character picked on the Character row: the same one, frame to frame.
+		const uint32_t pick = modelFrom(want[I_TGT_HI], want[I_TGT_LO]);
+		if (pick)
+		{
+			const float at0[3] = { want[I_TGT_X], want[I_TGT_Y], want[I_TGT_Z] };
+			if (pick != s_tgtModel || memcmp(at0, s_tgtPick, sizeof(at0)) != 0)
+			{
+				s_tgtModel = pick;
+				memcpy(s_tgtPick, at0, sizeof(at0));
+				memcpy(s_tgtLast, at0, sizeof(at0));
+				s_tgtPed = nullptr;
+			}
+			lights::PoolView v;
+			if (!lights::poolView(lights::E_PED, v)) return;
+			void* found = nullptr;
+			float bestD = 0.0f;
+			for (int i = 0; i < v.size; ++i)
+			{
+				void* e = lights::slotAt(v, i);
+				if (!e || lights::modelOf(e) != pick) continue;
+				if (e == s_tgtPed) { found = e; break; }                       // still the one it was
+				lights::Frame f;
+				if (!lights::frameOfEntity(e, f)) continue;
+				const float d = lights::dist2(f.d, s_tgtLast);
+				if (!found || d < bestD) { found = e; bestD = d; }
+			}
+			if (!found) return;
+			float z, at[3];
+			if (!chestOf(found, c.cam, &z, at)) return;
+			if (found != s_tgtPed && s_plLogs < 12) { ++s_plLogs; logf("enb: Player focus follows the character picked for this keyframe, %.1f m away", z); }
+			s_tgtPed = found;
+			memcpy(s_tgtLast, at, sizeof(at));
+			s_plPed = found; s_plModel = pick; s_plHow = 3;
+			publishFollowed(at, z);
+			return;
+		}
+
+		// No pick: the player - the ped with player data, else the character
+		// nearest the middle of the picture, kept while it stays in view.
 		lights::PoolView v;
 		if (!lights::poolView(lights::E_PED, v) || v.size <= 0) return;
 		constexpr int kMax = 256;
@@ -762,7 +867,6 @@ namespace enbdof
 		}
 		if (n <= 0) return;
 
-		// 1. the ped with player data
 		const ULONGLONG now = GetTickCount64();
 		if (s_linkA < 0 && s_linkTries < 3 && now >= s_nextLearn && n >= 4)
 		{
@@ -787,7 +891,6 @@ namespace enbdof
 			if (found && (!chestOf(found, c.cam, &z, at) || z < 0.3f || z > 300.0f)) found = nullptr;   // the hidden real player, far away
 			if (found) how = 1;
 		}
-		// 2. the character nearest the middle, kept while it stays in view
 		if (!found && s_plPed && lights::modelOf(s_plPed) == s_plModel)
 		{
 			for (int i = 0; i < n; ++i)
@@ -808,13 +911,12 @@ namespace enbdof
 		if (!chestOf(found, c.cam, &z, at) || z < 0.3f) return;
 		if (found != s_plPed || how != s_plHow)
 		{
-			if (s_plLogs < 6) { ++s_plLogs; logf("enb: Player focus follows %s, %.1f m away", how == 1 ? "the ped with player data" : "the character nearest the middle of the picture", z); }
+			if (s_plLogs < 12) { ++s_plLogs; logf("enb: Player focus follows %s, %.1f m away", how == 1 ? "the ped with player data" : "the character nearest the middle of the picture", z); }
 			s_plPed = found;
 			s_plModel = lights::modelOf(found);
 			s_plHow = how;
 		}
-		s_playerMetres = z;
-		s_playerAt = GetTickCount64();
+		publishFollowed(at, z);
 	}
 
 	// ---- one frame -------------------------------------------------------------
@@ -973,18 +1075,21 @@ namespace enbdof
 			logf("enb: Auto focus has nothing measured - it needs ReShade with EscoFlare.fx (its EscoFocus pass). The keyframe's Focus Distance is used meanwhile.");
 		}
 		float sizeMax = 0.0f, sizeBlur = 0.0f;
-		blurSizesFor(w.v[I_APERTURE], w.v[14], w.v[12], &sizeMax, &sizeBlur);
+		// Keyframe DOF Off takes the blur away (fading between keyframes).
+		const float apEff = clampf(w.v[I_APERTURE], 0.0f, kApertureFull) * clampf(w.v[I_ENABLED], 0.0f, 1.0f);
+		blurSizesFor(apEff, w.v[14], w.v[12], &sizeMax, &sizeBlur);
 		for (int i = 0; i < N; ++i)
 		{
 			if (!s_known[i]) continue;
 			if (i == I_FOCUS && !s_techPush) continue;
+			if (isOurs(i)) continue;
 			// NVE always runs its Manual technique (TECHNIQUE 1); Auto and Player
 			// are ours. The sizes are the keyframe's, scaled by the Aperture.
 			const float out = i == I_FOCUS ? (float)TECH_MANUAL
 							: i == I_MOUSE ? 0.0f
 							: i == 14 ? sizeMax
 							: i == 12 ? sizeBlur
-							: i == I_APERTURE ? clampf(w.v[i], 0.0f, kApertureFull) // an old key's 1.38 is 100%, not a paper-thin focus
+							: i == I_APERTURE ? apEff                            // an old key's 1.38 is 100%, not a paper-thin focus
 							: i == I_DIST ? (autoD > 0.0f ? autoD : enbDistance(clampf(w.v[i], 0.3f, 200.0f), n))   // metres -> NVE's Distance
 							: w.v[i];
 			if (s_havePushed[i] && same(i, s_pushed[i], out)) continue;
@@ -1042,9 +1147,9 @@ namespace enbdof
 	void fromGame()
 	{
 		if (!s_ready) return;
-		if (g_cfg.enbDof) trackPlayer();
 		Want w;
 		compute(w);
+		if (g_cfg.enbDof) trackPlayer(w.v);
 		lights::seqWrite(s_want, s_wantSeq, w);
 		const ULONGLONG last = (ULONGLONG)s_lastCb;
 		if (!last || GetTickCount64() - last > 1000) push();
@@ -1072,11 +1177,17 @@ namespace enbdof
 
 	void buildList()
 	{
-		const int fm = focusModeHere();
 		s_listN = 0;
 		auto add = [&](int p) { if ((isVirtual(p) || s_known[p]) && s_listN < 16) s_list[s_listN++] = p; };
+		add(I_ENABLED);
+		{
+			bool o;
+			if (valueHere(I_ENABLED, &o) < 0.5f) return;      // Off: nothing else to set on this keyframe
+		}
+		const int fm = focusModeHere();
 		add(I_FOCUS);
 		if (fm == FM_MANUAL) add(I_DIST);
+		if (fm == FM_PLAYER) add(V_TARGET);
 		if (s_known[I_APERTURE]) add(V_APERTURE);
 		add(14);                                          // DOF : Maximum size  - what the blur reaches at 100%
 		add(12);                                          // Blur : Size         - its softening at 100%
@@ -1091,12 +1202,14 @@ namespace enbdof
 	int listCount() { return s_listN; }
 	int listParam(int k) { return (k >= 0 && k < s_listN) ? s_list[k] : -1; }
 	// Changing these adds or removes rows.
-	bool reshapes(int p) { return p == I_FOCUS || p == I_NEAR; }
+	bool reshapes(int p) { return p == I_FOCUS || p == I_NEAR || p == I_ENABLED; }
 
 	const char* menuLabel(int p)
 	{
 		switch (p)
 		{
+		case I_ENABLED:         return "Keyframe DOF";
+		case V_TARGET:          return "Character";
 		case I_FOCUS:           return "Focus Mode";
 		case V_APERTURE:        return "Aperture";
 		case V_NEAR:            return "Near Field Amount";
@@ -1156,6 +1269,23 @@ namespace enbdof
 			r = on > 0.5f ? (st > 0.05f ? st : 0.05f) : 0.0f;
 			break;
 		}
+		case V_TARGET:
+		{
+			// -1 no pick (the player is found by itself), -2 picked but not in
+			// view, else which of the people on screen, left to right
+			const uint32_t pick = modelFrom(valueHere(I_TGT_HI, &o1), valueHere(I_TGT_LO, &o2));
+			const lights::Ctx c = lights::ctx();
+			Person ppl[64];
+			const int n = c.valid ? peopleOnScreen(c.cam, ppl, 64) : 0;
+			s_peopleCount = n;
+			r = -1.0f;
+			if (pick)
+			{
+				r = -2.0f;
+				for (int i = 0; i < n; ++i) if (ppl[i].ped == s_tgtPed) { r = (float)i; break; }
+			}
+			break;
+		}
 		}
 		*own = o1 || o2;
 		return r;
@@ -1192,6 +1322,7 @@ namespace enbdof
 	{
 		const Def& d = kDefs[p];
 		float v;
+		if (p == I_ENABLED) return cur > 0.5f ? 0.0f : 1.0f;
 		if (p == I_DIST)
 		{
 			float x = clampf(cur, d.lo, d.hi);
@@ -1305,6 +1436,32 @@ namespace enbdof
 			put(18, st > 4.0f ? 4.0f : st);
 			break;
 		}
+		case V_TARGET:
+		{
+			// Left / right: the next person on screen that way. The first press
+			// takes the one followed now, so nothing jumps.
+			const lights::Ctx c = lights::ctx();
+			Person ppl[64];
+			const int n = c.valid ? peopleOnScreen(c.cam, ppl, 64) : 0;
+			if (n <= 0) break;
+			int curI = -1;
+			for (int i = 0; i < n; ++i) if (ppl[i].ped == s_plPed) { curI = i; break; }
+			int nx;
+			if (cur <= -1.0f && cur > -1.5f && curI >= 0) nx = curI;
+			else if (curI < 0) nx = delta > 0 ? 0 : n - 1;
+			else nx = ((curI + (delta > 0 ? 1 : -1)) % n + n) % n;
+			const uint32_t m = lights::modelOf(ppl[nx].ped);
+			if (!m) break;
+			float hi, lo;
+			modelTo(m, &hi, &lo);
+			put(I_TGT_HI, hi); put(I_TGT_LO, lo);
+			put(I_TGT_X, ppl[nx].chest[0]); put(I_TGT_Y, ppl[nx].chest[1]); put(I_TGT_Z, ppl[nx].chest[2]);
+			s_tgtPed = ppl[nx].ped; s_tgtModel = m;
+			memcpy(s_tgtPick, ppl[nx].chest, sizeof(s_tgtPick)); memcpy(s_tgtLast, ppl[nx].chest, sizeof(s_tgtLast));
+			s_plPed = ppl[nx].ped;
+			publishFollowed(ppl[nx].chest, ppl[nx].z);
+			break;
+		}
 		case I_FOCUS:
 		{
 			const float nv = stepped(p, cur, delta);
@@ -1351,6 +1508,7 @@ namespace enbdof
 		case V_APERTURE:   clr(I_APERTURE); clr(I_AUTO_APERTURE); break;
 		case V_NEAR:       clr(I_NEARPOWER); clr(I_AUTO_NEARPOWER); break;
 		case V_ANAMORPHIC: clr(17); clr(18); break;
+		case V_TARGET:     clr(I_TGT_HI); clr(I_TGT_LO); clr(I_TGT_X); clr(I_TGT_Y); clr(I_TGT_Z); break;
 		default:           if (p >= 0 && p < N) clr(p); else return; break;
 		}
 		lights::markDirty();
@@ -1438,6 +1596,14 @@ namespace enbdof
 		if (p == V_APERTURE) { snprintf(buf, cap, "%.0f%%", v); return buf; }
 		if (p == V_NEAR) { snprintf(buf, cap, "%.0f%%", v); return buf; }
 		if (p == V_ANAMORPHIC) { if (v <= 0.0f) return "Off"; snprintf(buf, cap, "%.2fx", v); return buf; }
+		if (p == V_TARGET)
+		{
+			if (v > -1.5f && v < -0.5f) return "Auto";
+			if (v < -1.5f) return "Picked (not in view)";
+			snprintf(buf, cap, "Person %d of %d", (int)v + 1, s_peopleCount);
+			return buf;
+		}
+		if (p == I_ENABLED) return v > 0.5f ? "On" : "Off";
 		if (p < 0 || p >= N) return "";
 		const Def& d = kDefs[p];
 		if (p == I_FOCUS)
@@ -1463,30 +1629,31 @@ namespace enbdof
 		return buf;
 	}
 
-	// One line on what an option does, for the help line under the column.
+	// One short line on what an option does, for the help line under the column.
 	const char* hint(int p)
 	{
 		switch (p)
 		{
-		case I_FOCUS:           return "Auto: what is in the middle of the picture. Manual: Focus Distance. Player: the player, wherever they are.";
-		case V_APERTURE:        return "How much blur: 0% none at all, 100% the most. Hold left/right to go faster.";
-		case V_NEAR:            return "How much blur in front of the focus, next to the blur behind it: 100% the same.";
-		case V_ANAMORPHIC:      return "Oval bokeh, like an anamorphic lens: Off, or how stretched.";
-		case I_DIST:            return centreFresh() ? "Where it is sharp, in metres. Enter: on what is in the middle. Nearer things blur only with Near Field Blur on."
-												 : "Where it is sharp, in metres. Nearer things blur only with Near Field Blur on.";
-		case I_APERTURE:        return "How fast the blur comes in past the focus. Small numbers: gentle.";
-		case I_AUTO_APERTURE:   return "How strong the blur is.";
-		case I_NEAR:            return "Blur what is closer than the focus too.";
+		case I_ENABLED:         return "Blur on this keyframe. Off = no blur here.";
+		case I_FOCUS:           return "Auto: the middle of the screen. Manual: a distance. Player: a person.";
+		case V_TARGET:          return "Who to focus on. Left/right: the next person. The marker shows who.";
+		case I_DIST:            return centreFresh() ? "Focus distance in metres. Enter: focus on the middle." : "Focus distance in metres.";
+		case V_APERTURE:        return "How much blur. 0% none, 100% the most.";
+		case V_NEAR:            return "How much blur in front of the focus.";
+		case V_ANAMORPHIC:      return "Oval bokeh. Off, or how stretched.";
+		case I_APERTURE:
+		case I_AUTO_APERTURE:   return "How much blur.";
+		case I_NEAR:            return "Blur things in front of the focus too.";
 		case I_NEARPOWER:
 		case I_AUTO_NEARPOWER:  return "Higher = less blur in front of the focus.";
 		case 7:  return "How fast the auto-focus follows.";
 		case 8:  return "Makes the auto-focus reach further.";
 		case 9:  return "Where the auto-focus looks, left to right.";
 		case 10: return "Where the auto-focus looks, top to bottom.";
-		case 11: return "Colour fringes at the edges of the blur. They grow with the blur, so they show more at a higher Aperture.";
-		case 12: return "How soft the blur is, at 100% Aperture - the Aperture scales it.";
+		case 11: return "Colour fringes in the blur.";
+		case 12: return "How soft the blur is at 100%.";
 		case 13: return "More steps, smoother blur, slower.";
-		case 14: return "How far the blur reaches, at 100% Aperture - the Aperture scales it.";
+		case 14: return "How big the blur gets at 100%.";
 		case 15: return "Bokeh quality.";
 		case 16: return "Lower renders the blur at less resolution - faster.";
 		case 17: return "Oval bokeh, like an anamorphic lens.";

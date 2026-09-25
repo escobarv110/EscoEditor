@@ -922,7 +922,7 @@ namespace lightui
 		ImGui::TextDisabled("ENB's options for this clip (what a new key holds):");
 		auto option = [](int i) {
 			const enbdof::Def& d = enbdof::kDefs[i];
-			if (!enbdof::s_known[i] || enbdof::isLabel(i)) return;
+			if (!enbdof::s_known[i] || enbdof::isLabel(i) || enbdof::isOurs(i)) return;
 			ImGui::PushID(2000 + i);
 			float& v = enbdof::s_manual[i];
 			const char* name = enbdof::menuLabel(i);
@@ -1447,37 +1447,65 @@ namespace lightui
 	}
 
 	// reshade_overlay: every frame, on ReShade's render thread.
-	// The mouse pointer, drawn by the editor itself: a white arrow with a black
-	// edge. ReShade draws ImGui's cursor only while its own menu is open, and
-	// the game hides its arrow while the editor holds the mouse. 4.12 drew a
-	// crosshair only where ImGui said the mouse was; if ImGui does not know
-	// (ReShade's input sees another window), it drew nothing. Now the position
-	// comes from Windows when ImGui has none, and the log says which it was.
-	int  g_ptrLogs = 0;
-
-	void drawPointer(reshade::api::effect_runtime* rt, const ImGuiIO& io)
+	// Where Windows has the mouse, in ImGui's pixels. False when it cannot say.
+	bool osMouse(reshade::api::effect_runtime* rt, const ImGuiIO& io, ImVec2* out)
 	{
-		ImVec2 m = io.MousePos;
-		const bool fromImgui = ImGui::IsMousePosValid(&io.MousePos);
-		bool fromOs = false;
 		POINT pt = {};
-		const HWND hw = (HWND)rt->get_hwnd();
 		RECT rc = {};
-		if (hw && GetCursorPos(&pt) && ScreenToClient(hw, &pt) && GetClientRect(hw, &rc) && rc.right > 0 && rc.bottom > 0)
+		const HWND hw = (HWND)rt->get_hwnd();
+		if (!hw || !GetCursorPos(&pt) || !ScreenToClient(hw, &pt) || !GetClientRect(hw, &rc) || rc.right <= 0 || rc.bottom <= 0) return false;
+		*out = ImVec2(pt.x * io.DisplaySize.x / (float)rc.right, pt.y * io.DisplaySize.y / (float)rc.bottom);
+		return true;
+	}
+
+	// ReShade follows the mouse only while its own menu is open: under FiveM
+	// it cannot take the game window's input ("Cannot capture input for window
+	// ... created by a different process" in ReShade.log), so the rest of the
+	// time its ImGui has the mouse at (0, 0) - which is where 4.12 - 4.19 drew
+	// the editor's pointer, in the corner. While the editor is open it tells
+	// ImGui itself: the cursor from Windows and the three buttons, every frame.
+	// Whether ReShade keeps those values for its next frame (then clicks work
+	// without its menu) or puts its (0, 0) back is judged once and logged.
+	ImVec2 g_fedPos = {};
+	bool   g_fed = false, g_feedJudged = false;
+	int    g_ptrLogs = 0;
+
+	void feedMouse(reshade::api::effect_runtime* rt, ImGuiIO& io)
+	{
+		ImVec2 os;
+		if (!osMouse(rt, io, &os)) { g_fed = false; return; }
+		const bool valid = ImGui::IsMousePosValid(&io.MousePos);
+		if (g_fed && !g_feedJudged)
 		{
-			fromOs = true;
-			if (!fromImgui) m = ImVec2(pt.x * io.DisplaySize.x / (float)rc.right, pt.y * io.DisplaySize.y / (float)rc.bottom);
+			g_feedJudged = true;
+			const bool kept = valid && io.MousePos.x == g_fedPos.x && io.MousePos.y == g_fedPos.y;
+			logf("lights: the editor gives ImGui the mouse itself (ReShade follows it only while its own menu is open) - %s",
+				kept ? "ReShade keeps it, so the editor's buttons and the gizmo take clicks without ReShade's menu"
+					 : "but ReShade puts its own back every frame: the pointer shows, and clicks need ReShade's menu open (INS)");
 		}
+		const float dx = io.MousePos.x - os.x, dy = io.MousePos.y - os.y;
+		if (valid && dx * dx + dy * dy < 64.0f) { g_fed = false; return; }   // ReShade's menu is open: its own mouse is right
+		io.MousePos = os;
+		static const int kVk[3] = { VK_LBUTTON, VK_RBUTTON, VK_MBUTTON };
+		for (int b = 0; b < 3; ++b) io.MouseDown[b] = (GetAsyncKeyState(kVk[b]) & 0x8000) != 0;
+		g_fedPos = os;
+		g_fed = true;
 		if (!g_ptrLogged && g_ptrLogs < 6)
 		{
 			g_ptrLogged = true;
 			++g_ptrLogs;
-			logf("lights: the editor's pointer - ImGui %s (%.0f, %.0f); Windows %s (%ld, %ld in a %ldx%ld window, ImGui draws %.0fx%.0f); window %s in front",
-				fromImgui ? "knows the mouse at" : "does NOT know where the mouse is", io.MousePos.x, io.MousePos.y,
-				fromOs ? "has it at" : "could not say", (long)pt.x, (long)pt.y, (long)rc.right, (long)rc.bottom,
-				io.DisplaySize.x, io.DisplaySize.y, hw && GetAncestor(hw, GA_ROOT) == GetAncestor(GetForegroundWindow(), GA_ROOT) ? "is" : "is NOT");
+			logf("lights: the editor's pointer - ReShade has the mouse at (%.0f, %.0f), Windows at (%.0f, %.0f): the editor uses Windows'", io.MousePos.x, io.MousePos.y, os.x, os.y);
 		}
-		if (!fromImgui && !fromOs) return;
+	}
+
+	// The mouse pointer, drawn by the editor itself: a white arrow with a black
+	// edge, where the mouse really is.
+	void drawPointer(reshade::api::effect_runtime* rt, const ImGuiIO& io)
+	{
+		ImVec2 m = io.MousePos;
+		ImVec2 os;
+		if (osMouse(rt, io, &os)) m = os;                 // Windows knows best where the cursor is
+		else if (!ImGui::IsMousePosValid(&io.MousePos)) return;
 		ImDrawList* dl = ImGui::GetForegroundDrawList();
 		const float k = (io.DisplaySize.y > 0.0f ? io.DisplaySize.y / 1080.0f : 1.0f) * 1.1f;
 		auto P = [&](float x, float y) { return ImVec2(m.x + x * k, m.y + y * k); };
@@ -1490,10 +1518,29 @@ namespace lightui
 		dl->AddPolyline(outline, 7, black, ImDrawFlags_Closed, 1.3f * k);
 	}
 
+	// A marker over the person Player focus follows, while the Character row
+	// of the Depth of Field menu has the focus: a small arrow above their head.
+	void drawFocusMarker(const ImGuiIO& io)
+	{
+		if (!enbdof::s_markerOn || !editorOpen() || GetTickCount64() - enbdof::s_markAt > 800) return;
+		const lights::Ctx c = lights::ctx();
+		if (!c.valid) return;
+		const lights::View v = lights::makeView(c.cam, io.DisplaySize.x, io.DisplaySize.y);
+		const float head[3] = { enbdof::s_markPos[0], enbdof::s_markPos[1], enbdof::s_markPos[2] + 0.55f };
+		float sp[2];
+		if (!lights::toScreen(v, head, sp)) return;
+		ImDrawList* dl = ImGui::GetForegroundDrawList();
+		const float k = io.DisplaySize.y > 0.0f ? io.DisplaySize.y / 1080.0f : 1.0f;
+		const ImVec2 a(sp[0] - 11.0f * k, sp[1] - 34.0f * k), b(sp[0] + 11.0f * k, sp[1] - 34.0f * k), t(sp[0], sp[1] - 14.0f * k);
+		dl->AddTriangleFilled(a, b, t, IM_COL32(255, 205, 50, 255));
+		dl->AddTriangle(a, b, t, IM_COL32(0, 0, 0, 255), 2.0f * k);
+	}
+
 	void onOverlay(reshade::api::effect_runtime* rt)
 	{
 		ImGuiIO& io = ImGui::GetIO();
 		if (!isMainRuntime(rt, io.DisplaySize)) return;
+		drawFocusMarker(io);
 		lights::g_textInput = io.WantTextInput;
 
 		// The key that just closed the editor opens it again only once it is up.
@@ -1517,6 +1564,7 @@ namespace lightui
 		if (!g_openLogged) { g_openLogged = true; logf("lights: light editor opened (clip %d, %d light(s))", lights::g_curClip + 1, S->count); }
 
 		rt->block_input_next_frame();
+		feedMouse(rt, io);                     // before anything reads the mouse this frame
 		io.MouseDrawCursor = true;
 		const lights::Ctx c = lights::ctx();
 		const bool haveCam = c.valid && GetTickCount64() - c.at < 1000;

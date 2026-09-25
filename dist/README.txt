@@ -1,4 +1,4 @@
-EscoEditor.asi 4.19  -  more control for the Rockstar Editor
+EscoEditor.asi 4.20  -  more control for the Rockstar Editor
 ======================================================================
 (formerly EditorCamSpeed.asi - same plugin, new name)
 
@@ -9,6 +9,26 @@ menu, adds scene lights you place in the picture with a 3D gizmo - fixed in
 the world, on the camera, or riding along with a ped, a vehicle or a prop -
 and keeps the free camera speed keys. The editor's own camera path,
 transitions, shake and depth of field are never touched.
+
+WHAT CHANGED IN 4.20
+  - Keyframe DOF: On / Off - ENB's blur for one keyframe. Off takes the blur
+    away on that keyframe only (it fades out to it and back in after); the
+    other keyframes keep theirs. Before, the only off was the ENB row, which
+    is the switch for the whole project.
+  - The ENB row is On / Off again, and a new Apply To row says where changes
+    go: This Keyframe, or All Keyframes.
+  - Character (Focus Mode Player): pick who the focus follows. Left/right
+    moves to the next person on screen, left to right; a yellow marker over
+    their head shows who, while this row is selected. Each keyframe keeps its
+    own pick (Enter: back to Auto - the character nearest the middle).
+  - Shorter help lines on every ENB row.
+  - The light editor's arrow shows without ReShade's menu. Under FiveM,
+    ReShade follows the mouse only while its own menu is open, so the rest of
+    the time it had the mouse at (0, 0) - and the arrow was drawn in the
+    corner. The arrow now follows Windows' cursor, and the editor tells ImGui
+    where the mouse is and which buttons are down. The log says whether
+    ReShade keeps that (then clicks work without its menu) or not (then open
+    ReShade's menu, INS, to click in the editor).
 
 WHAT CHANGED IN 4.19
   - Fixed: FiveM crashing on start at dxgi.dll+1131CC with the ENB option on
@@ -578,7 +598,7 @@ WHAT CHANGED IN 2.9
 
 CHECK YOU HAVE THIS VERSION
   The first line of EscoEditor.log (next to the .asi) must say
-  "EscoEditor 4.19".
+  "EscoEditor 4.20".
 
 INSTALL
   FiveM:          close FiveM, run Install.bat - or copy EscoEditor.asi

@@ -693,21 +693,39 @@ int main(int argc, char** argv)
             // the menu list, as ENB's own window has it and no more
             char fb0[16];
             for (int i = 0; i < ed::N; ++i) ed::s_known[i] = !ed::isLabel(i);
+            ed::s_manual[ed::I_ENABLED] = 1.0f;
             ed::s_manual[ed::I_FOCUS] = 1.0f; ed::s_manual[ed::I_NEAR] = 1.0f; ed::s_manual[17] = 1.0f;
             ed::buildList();
-            const int wantManual[] = { ed::I_FOCUS, ed::I_DIST, ed::V_APERTURE, 14, 12, ed::I_NEAR, ed::V_NEAR, 11, ed::V_ANAMORPHIC };
-            bool listOk = ed::listCount() == 9;
-            for (int k = 0; listOk && k < 9; ++k) if (ed::listParam(k) != wantManual[k]) listOk = false;
-            CHECK(listOk && ed::listParam(9) == -1, "Manual: Focus Mode, Focus Distance, Aperture, Maximum Size, Blur Size, Near Field Blur On + its amount, Chromatic Spread, Anamorphic");
+            const int wantManual[] = { ed::I_ENABLED, ed::I_FOCUS, ed::I_DIST, ed::V_APERTURE, 14, 12, ed::I_NEAR, ed::V_NEAR, 11, ed::V_ANAMORPHIC };
+            bool listOk = ed::listCount() == 10;
+            for (int k = 0; listOk && k < 10; ++k) if (ed::listParam(k) != wantManual[k]) listOk = false;
+            CHECK(listOk && ed::listParam(10) == -1, "Manual: Keyframe DOF, Focus Mode, Focus Distance, Aperture, Maximum Size, Blur Size, Near Field Blur + amount, Chromatic Spread, Anamorphic");
             ed::s_manual[ed::I_FOCUS] = 0.0f; ed::s_manual[ed::I_NEAR] = 0.0f; ed::s_manual[17] = 0.0f;
             ed::buildList();
-            const int wantAuto[] = { ed::I_FOCUS, ed::V_APERTURE, 14, 12, ed::I_NEAR, 11, ed::V_ANAMORPHIC };
-            bool autoOk = ed::listCount() == 7;
-            for (int k = 0; autoOk && k < 7; ++k) if (ed::listParam(k) != wantAuto[k]) autoOk = false;
+            const int wantAuto[] = { ed::I_ENABLED, ed::I_FOCUS, ed::V_APERTURE, 14, 12, ed::I_NEAR, 11, ed::V_ANAMORPHIC };
+            bool autoOk = ed::listCount() == 8;
+            for (int k = 0; autoOk && k < 8; ++k) if (ed::listParam(k) != wantAuto[k]) autoOk = false;
             CHECK(autoOk, "Auto: the same rows without a distance; Near Field Blur Off hides its amount");
             ed::s_manual[ed::I_FOCUS] = 2.0f;
             ed::buildList();
-            CHECK(ed::listCount() == 7 && ed::listParam(1) == ed::V_APERTURE, "Player: no distance row either - the player is the distance");
+            CHECK(ed::listCount() == 9 && ed::listParam(2) == ed::V_TARGET && ed::listParam(3) == ed::V_APERTURE,
+                  "Player: a Character row to pick who, and no distance row");
+            ed::s_manual[ed::I_ENABLED] = 0.0f;
+            ed::buildList();
+            CHECK(ed::listCount() == 1 && ed::listParam(0) == ed::I_ENABLED && ed::reshapes(ed::I_ENABLED),
+                  "Keyframe DOF Off: that row alone - nothing else to set on a keyframe with no blur");
+            ed::s_manual[ed::I_ENABLED] = 1.0f;
+            {
+                char kb[32];
+                CHECK(!strcmp(ed::format(ed::I_ENABLED, 1.0f, kb, 32), "On") && !strcmp(ed::format(ed::I_ENABLED, 0.0f, kb, 32), "Off") &&
+                      ed::stepped(ed::I_ENABLED, 1.0f, 8) == 0.0f && ed::stepped(ed::I_ENABLED, 0.0f, -1) == 1.0f &&
+                      !strcmp(ed::format(ed::V_TARGET, -1.0f, kb, 32), "Auto") && !strcmp(ed::menuLabel(ed::V_TARGET), "Character"),
+                      "Keyframe DOF reads On / Off and flips; the Character row reads Auto until someone is picked");
+                float hi, lo;
+                ed::modelTo(0xB881AA22u, &hi, &lo);
+                CHECK(ed::modelFrom(hi, lo) == 0xB881AA22u && ed::modelFrom(1.0f, 1.0f) == 0u && ed::modelFrom(0.0f, 1.0f) == 0u && ed::modelFrom(-3.0f, 2.0f) == 0u,
+                      "a picked character's model survives two floats exactly; 4.9's 0/1 section values in those slots are not a pick");
+            }
 
             // one Aperture percentage, converted for whichever technique runs
             CHECK(ed::manualFromPct(0.0f) == 0.0f && fabsf(ed::manualFromPct(100.0f) - 0.12f) < 1e-6f && fabsf(ed::manualFromPct(50.0f) - 0.06f) < 1e-6f &&
@@ -911,6 +929,15 @@ int main(int argc, char** argv)
                 CHECK(o410 && o410->enb.n == 1 && o410->enb.k[0].set == 4096u && o410->enb.k[0].v[12] == 3.0f && o410->enb.k[0].v[ed::I_FOCUS] == 0.0f,
                       "a 4.9 / 4.10 key (29 options) still reads, and sets no Focus Mode");
             }
+            {
+                std::string l419 = "EscoEditorLights 2\nscope 0 Old419\ne 250 4096";
+                for (int q = 0; q < 30; ++q) l419 += " 3";
+                l419 += "\n";
+                lt::parse(l419);
+                lt::LightSet* o419 = lt::findSet("Old419", 0, false);
+                CHECK(o419 && o419->enb.n == 1 && o419->enb.k[0].set == 4096u && o419->enb.k[0].v[12] == 3.0f && o419->enb.k[0].v[ed::I_ENABLED] == 0.0f,
+                      "a 4.11 - 4.19 key (30 options) still reads, and does not switch Keyframe DOF off");
+            }
             std::string old46 = "EscoEditorLights 2\nscope 0 Old46\ne 500";
             for (int q = 0; q < 23; ++q) old46 += " 2";
             old46 += "\n";
@@ -946,6 +973,19 @@ int main(int argc, char** argv)
         CHECK(fabsf(after - 0.075f) < 1e-6f && fabsf(k3 - 0.03f) < 1e-6f && fabsf(past - 0.03f) < 1e-6f,
               "and back down to keyframe 3, which has none of its own - it no longer carries on (%.3f %.3f %.3f)", after, k3, past);
         CHECK(anaMid == 0.0f && ana2 == 1.0f && ana3 == 0.0f, "a switch changes at its keyframe and ends at the next");
+        {
+            lights::EnbTrack et = {};
+            float sd[ed::N] = {};
+            sd[ed::I_ENABLED] = 1.0f;
+            lights::setEnbParam(et, 1000.0f, ed::I_ENABLED, 0.0f, sd);      // keyframe 2: Keyframe DOF Off
+            float o1[ed::N], o2[ed::N], o3[ed::N];
+            memcpy(o1, sd, sizeof(o1)); ed::evalByMarker(et, 500.0f, o1);
+            memcpy(o2, sd, sizeof(o2)); ed::evalByMarker(et, 1000.0f, o2);
+            memcpy(o3, sd, sizeof(o3)); ed::evalByMarker(et, 2000.0f, o3);
+            CHECK(fabsf(o1[ed::I_ENABLED] - 0.5f) < 1e-5f && o2[ed::I_ENABLED] == 0.0f && o3[ed::I_ENABLED] == 1.0f,
+                  "Keyframe DOF Off on one keyframe: the blur fades out to it and back in after - the others keep theirs (%.2f %.2f %.2f)",
+                  o1[ed::I_ENABLED], o2[ed::I_ENABLED], o3[ed::I_ENABLED]);
+        }
 
         // Copy DOF / Paste DOF / DOF To All carry the ENB rows (4.16)
         {
