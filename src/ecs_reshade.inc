@@ -94,6 +94,8 @@ namespace rs
 		ra::resource                staging[3] = {};
 		uint32_t                    focusFrame = 0;
 		bool                        focusLooked = false, focusOn = false;
+		ULONGLONG                   loadedAt = 0;      // ReShade said its effects are loaded (reshade_reloaded_effects)
+		ULONGLONG                   foundAt = 0;       // EscoFlare.fx was first seen
 	};
 	constexpr int kMaxEntries = 4;
 	Entry g_entries[kMaxEntries];
@@ -475,6 +477,7 @@ namespace rs
 			if (now < e->nextFind) return;
 			e->nextFind = now + 1000;
 			e->found = findAll(*e);
+			if (e->found && !e->foundAt) e->foundAt = now;
 			if (e->found)
 			{
 				logf("reshade: EscoFlare.fx is loaded for a %ux%u window - EscoEditor draws the lens flares from now on", e->w, e->h);
@@ -499,9 +502,12 @@ namespace rs
 			if (e == m && (!e->focusTech.handle || !e->focusTex.handle))
 				logf("reshade: the loaded EscoFlare.fx has no EscoFocus - an older copy? Press Reload in ReShade (the ENB option's Auto focus needs it)");
 		}
-		const bool wantFocus = e == m && e->focusTech.handle && e->focusTex.handle && enbdof::wantsCentre() && rt->get_effects_state();
-		if (e->focusTech.handle && rt->get_technique_state(e->focusTech) != wantFocus) rt->set_technique_state(e->focusTech, wantFocus);
-		e->focusOn = wantFocus;
+		// Whether EscoFocus runs this frame is decided after the last frame
+		// finished (focusSwitch, from reshade_present), never here: switching a
+		// technique on while ReShade is still loading its effects made it draw
+		// a pass whose resources did not exist yet - a null read inside
+		// ReShade, dxgi.dll+1131CC, on every start with the ENB option on (4.19).
+		e->focusOn = e->focusTech.handle && e->focusTex.handle && rt->get_technique_state(e->focusTech);
 
 		lights::FlareSet F;
 		const bool want = wantNow(F);
@@ -542,12 +548,30 @@ namespace rs
 		if (e && e->focusOn && cmd) readFocus(*e, cmd);
 	}
 
+	// EscoFocus on or off for the next frame, decided once this one is done.
+	// Only while a replay runs, with the ENB option on, and only once
+	// ReShade has said its effects are loaded - three seconds after that, or
+	// ten after EscoFlare.fx was first seen if that word never comes.
+	int g_focusSwitchLogs = 0;
+
+	void focusSwitch(Entry& e)
+	{
+		if (!e.found || !e.focusTech.handle || !e.focusTex.handle) return;
+		const ULONGLONG now = GetTickCount64();
+		const bool settled = e.loadedAt ? now - e.loadedAt > 3000 : (e.foundAt && now - e.foundAt > 10000);
+		const bool want = &e == mainEntry() && settled && g_cfg.enbMeasure && enbdof::wantsCentre() && replayMode() > 0 && e.rt->get_effects_state();   // any replay: the editor, playback, an export
+		if (e.rt->get_technique_state(e.focusTech) == want) return;
+		e.rt->set_technique_state(e.focusTech, want);
+		if (g_focusSwitchLogs < 6) { ++g_focusSwitchLogs; logf("reshade: EscoFocus %s", want ? "on - measuring the middle of the picture for the ENB focus" : "off"); }
+	}
+
 	// After ReShade's Present work: report what the frame looked like, then
 	// start the next one.
 	void onPresentDone(ra::effect_runtime* rt)
 	{
 		Entry* e = entryFor(rt, false);
 		if (!e) return;
+		focusSwitch(*e);
 		if (e == mainEntry()) InterlockedIncrement(&g_presented);   // one per frame the game draws
 		if (e == mainEntry() && g_armed)
 		{
@@ -577,7 +601,11 @@ namespace rs
 
 	void onReloaded(ra::effect_runtime* rt)
 	{
-		if (Entry* e = entryFor(rt, false)) { e->found = false; e->nextFind = 0; e->fallbackOn = false; e->focusLooked = false; e->focusOn = false; e->focusFrame = 0; }
+		if (Entry* e = entryFor(rt, true))
+		{
+			e->found = false; e->nextFind = 0; e->fallbackOn = false; e->focusLooked = false; e->focusOn = false; e->focusFrame = 0;
+			e->loadedAt = GetTickCount64();       // all of ReShade's effects are loaded now
+		}
 		if (g_bound && g_bound->rt == rt) g_bound = nullptr;
 		refreshLive();
 	}

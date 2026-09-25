@@ -1,4 +1,4 @@
-EscoEditor.asi 4.18  -  more control for the Rockstar Editor
+EscoEditor.asi 4.19  -  more control for the Rockstar Editor
 ======================================================================
 (formerly EditorCamSpeed.asi - same plugin, new name)
 
@@ -9,6 +9,18 @@ menu, adds scene lights you place in the picture with a 3D gizmo - fixed in
 the world, on the camera, or riding along with a ped, a vehicle or a prop -
 and keeps the free camera speed keys. The editor's own camera path,
 transitions, shake and depth of field are never touched.
+
+WHAT CHANGED IN 4.19
+  - Fixed: FiveM crashing on start at dxgi.dll+1131CC with the ENB option on
+    (4.14 - 4.18). EscoFocus, the one-pixel pass that measures the middle of
+    the picture, was switched on inside ReShade's own effect rendering on the
+    very first frames, while ReShade was still loading its effects - and
+    ReShade then drew it before its resources existed (a null read inside
+    ReShade). Now it only runs while a replay is open, only once ReShade has
+    said its effects are loaded, and it is switched between frames, never in
+    the middle of ReShade's work. EnbDofMeasure=0 in EscoEditor.ini turns the
+    measuring off altogether (Auto focus and Enter on Focus Distance then have
+    nothing to go on; Manual and Player still work).
 
 WHAT CHANGED IN 4.18
   - Focus Distance works as a distance. It moved by 10% of itself a press,
@@ -566,7 +578,7 @@ WHAT CHANGED IN 2.9
 
 CHECK YOU HAVE THIS VERSION
   The first line of EscoEditor.log (next to the .asi) must say
-  "EscoEditor 4.18".
+  "EscoEditor 4.19".
 
 INSTALL
   FiveM:          close FiveM, run Install.bat - or copy EscoEditor.asi

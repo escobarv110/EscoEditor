@@ -1,4 +1,4 @@
-	constexpr const char* kVersion = "4.18";
+	constexpr const char* kVersion = "4.19";
 
 	// ------------------------------------------------------------------ paths
 	char    g_dir[MAX_PATH]  = {};   // folder of the .asi, trailing backslash
@@ -50,6 +50,7 @@
 		bool  enbFollow = false;  // ... a Custom keyframe's Focal Distance / Intensity drive ENB (opt-in since 4.11)
 		float enbStrength = 1.0f; // times the aperture a keyframe's intensity gives (100% = NVE's 0.5)
 		bool  enbAll = false;     // 4.18: a change on an ENB row goes to every keyframe of the clip
+		bool  enbMeasure = true;  // 4.19: EscoFocus measures the middle of the picture (Auto focus, Enter on Focus Distance)
 	} g_cfg;
 
 	// When the left mouse button was last seen down (worker clock); the menu
@@ -217,12 +218,14 @@
 		g_cfg.enbFollow = iniInt("EnbDofFollowGame", 0, 0, 1) != 0;
 		g_cfg.enbStrength = iniFloat("EnbDofStrength", 1.0f, 0.0f, 20.0f);
 		g_cfg.enbAll    = iniInt("EnbDofAllKeyframes", 0, 0, 1) != 0;
+		g_cfg.enbMeasure = iniInt("EnbDofMeasure", 1, 0, 1) != 0;
 		g_logOn = g_cfg.log;
 		iniEnsureKey("KeyFreeLook", g_cfg.keyFreeLook);   // new in 3.9
 		iniEnsureInt("LightsAllClips", 0);                // new in 3.11
 		iniEnsureInt("EnbDof", 0);                        // new in 4.6
 		iniEnsureInt("EnbDofFollowGame", 0);            // 4.11: replaces EnbDofFollow, off
 		iniEnsureInt("EnbDofAllKeyframes", 0);          // new in 4.18
+		iniEnsureInt("EnbDofMeasure", 1);               // new in 4.19
 		{
 			char b[8] = {};
 			GetPrivateProfileStringA(kSection, "EnbDofStrength", "?", b, sizeof(b), g_ini);   // new in 4.10
