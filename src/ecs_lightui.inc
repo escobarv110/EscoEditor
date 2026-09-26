@@ -937,6 +937,12 @@ namespace lightui
 				ImGui::SameLine();
 				if (ImGui::RadioButton("Player", m == enbdof::FM_PLAYER)) v = (float)enbdof::FM_PLAYER;
 			}
+			else if (i == enbdof::I_DIST)
+			{
+				// ENB's own number, as its window shows it (kept in metres inside)
+				float nve = enbdof::nveOfMetres(v);
+				if (ImGui::DragFloat(name, &nve, 0.02f, enbdof::kNveMin, enbdof::kNveMax, "%.2f")) v = enbdof::metresOfNve(nve);
+			}
 			else if (d.kind == enbdof::K_BOOL)
 			{
 				bool b = v > 0.5f;

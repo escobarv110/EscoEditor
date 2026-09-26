@@ -1,4 +1,4 @@
-EscoEditor.asi 4.21  -  more control for the Rockstar Editor
+EscoEditor.asi 4.22  -  more control for the Rockstar Editor
 ======================================================================
 (formerly EditorCamSpeed.asi - same plugin, new name)
 
@@ -9,6 +9,20 @@ menu, adds scene lights you place in the picture with a 3D gizmo - fixed in
 the world, on the camera, or riding along with a ped, a vehicle or a prop -
 and keeps the free camera speed keys. The editor's own camera path,
 transitions, shake and depth of field are never touched.
+
+WHAT CHANGED IN 4.22
+  - ENB's own numbers. Every ENB row shows and sends exactly the number
+    ENB's window shows - no metres, no percentages, no scaling:
+      Focus Distance  ENB's "Manual Focus : Distance" (7.00 is NVE's own)
+      Aperture        ENB's aperture (0 = no blur)
+      Blur Size, Maximum Size, Blur Quality (new: "Quality Steps"),
+      Near Field Blur + Near Field Power, Chromatic Spread, Anamorphic
+  - Smooth blur again. 4.15 - 4.21 shrank Blur Size and Maximum Size with the
+    Aperture - half of NVE's smoothing at 50% - which made the blur blocky.
+    They now go to ENB exactly as set.
+  - Focus Mode just says Auto, Manual or Player. The Focus Distance row is
+    always there and shows the number being sent (live in Auto and Player);
+    changing it turns that keyframe to Manual from that number.
 
 WHAT CHANGED IN 4.21
   - ENB settings belong to each clip. With Lights In Every Clip on, a clip's
@@ -616,7 +630,7 @@ WHAT CHANGED IN 2.9
 
 CHECK YOU HAVE THIS VERSION
   The first line of EscoEditor.log (next to the .asi) must say
-  "EscoEditor 4.21".
+  "EscoEditor 4.22".
 
 INSTALL
   FiveM:          close FiveM, run Install.bat - or copy EscoEditor.asi

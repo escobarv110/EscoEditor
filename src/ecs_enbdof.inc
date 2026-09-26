@@ -49,7 +49,7 @@ namespace enbdof
 		{ "--> Click here to enable Mouse Focus",       K_BOOL,   0.0f,    1.0f, "Mouse focus" },
 		{ "--> Blur the near field toggle",             K_BOOL,   0.0f,    1.0f, "Near field blur" },
 		{ "--> Near field intensity",                   K_FLOAT,  0.0f, 1000.0f, "Near field power" },
-		{ "--> Manual Focus : Distance",                K_FLOAT,  0.3f,  200.0f, "Focus distance (m)" },
+		{ "--> Manual Focus : Distance",                K_FLOAT,  0.2f, 2300.0f, "Focus distance" },
 		{ "--> Manual Focus : Aperture",                K_FLOAT,  0.0f,   10.0f, "Aperture" },
 		{ "--> Manual Focus : Near field power",        K_FLOAT,  0.0f, 1000.0f, "Near field power" },
 		{ "--> Auto-focus : Aperture",                  K_FLOAT,  0.0f,   10.0f, "Auto-focus aperture" },
@@ -235,6 +235,14 @@ namespace enbdof
 		if (!(d > 2.0f)) return 2.0f * n;
 		return n * (d * d + d * sqrtf(d * d - 4.0f)) * 0.5f;
 	}
+
+	// The Focus Distance row shows and sends NVE's own number - the one ENB's
+	// window shows (4.22). Keys keep metres (they have since 4.10), converted
+	// with one fixed near clip both ways, so the number shown is exactly the
+	// number ENB gets.
+	constexpr float kNear = 0.1f, kNveMin = 2.05f, kNveMax = 150.0f;
+	inline float nveOfMetres(float m) { return enbDistance(m, kNear); }
+	inline float metresOfNve(float d) { return metresOf(d, kNear); }
 
 	// ---- what is in the middle of the picture ------------------------------------
 	// Auto focus (4.14). Asking ENB to switch NVE to its Auto-focus technique
@@ -489,15 +497,7 @@ namespace enbdof
 				s_manual[i] = s_base[i];
 				s_havePushed[i] = false;
 			}
-			s_manual[I_DIST] = metresOf(s_base[I_DIST], nearClip());
-			// NVE's ini keeps the two apertures on their own scales (its 0.5 and
-			// 0.5 are "everything blurred" and "almost nothing"); the session
-			// starts with Auto at the same strength as Manual.
-			// 4.15: Aperture is the blur amount; the session starts at 50%.
-			// NVE's own 0.5 would read as 100% - more blur than anyone asked for.
-			if (s_known[I_APERTURE]) s_manual[I_APERTURE] = manualFromPct(50.0f);
-			if (s_known[I_APERTURE] && s_known[I_AUTO_APERTURE]) s_manual[I_AUTO_APERTURE] = autoFromPct(pctManual(s_manual[I_APERTURE]));
-			if (s_known[I_NEARPOWER] && s_known[I_AUTO_NEARPOWER]) s_manual[I_AUTO_NEARPOWER] = s_manual[I_NEARPOWER];
+			s_manual[I_DIST] = metresOfNve(s_base[I_DIST]);       // ENB's own values to start from, exactly
 			s_known[I_ENABLED] = true;                // ours: this keyframe's blur on or off
 			s_base[I_ENABLED] = s_manual[I_ENABLED] = 1.0f;
 			readTechnique();
@@ -547,7 +547,7 @@ namespace enbdof
 	void resetManual()
 	{
 		for (int i = 0; i < N; ++i) s_manual[i] = s_base[i];
-		s_manual[I_DIST] = metresOf(s_base[I_DIST], nearClip());
+		s_manual[I_DIST] = metresOfNve(s_base[I_DIST]);
 	}
 
 	// ---- the Rockstar Editor's Depth of Field at the playhead -----------------
@@ -1092,23 +1092,22 @@ namespace enbdof
 			s_autoLogs = 3;
 			logf("enb: Auto focus has nothing measured - it needs ReShade with EscoFlare.fx (its EscoFocus pass). The keyframe's Focus Distance is used meanwhile.");
 		}
-		float sizeMax = 0.0f, sizeBlur = 0.0f;
-		// Keyframe DOF Off takes the blur away (fading between keyframes).
-		const float apEff = clampf(w.v[I_APERTURE], 0.0f, kApertureFull) * clampf(w.v[I_ENABLED], 0.0f, 1.0f);
-		blurSizesFor(apEff, w.v[14], w.v[12], &sizeMax, &sizeBlur);
+		// Keyframe DOF Off takes the blur away (fading between keyframes). Every
+		// other number goes to ENB as it is - 4.15 to 4.21 scaled Blur Size and
+		// Maximum Size down with the Aperture, which is what made the blur
+		// blocky: half of NVE's smoothing pass at 50%.
+		const float apEff = w.v[I_APERTURE] * clampf(w.v[I_ENABLED], 0.0f, 1.0f);
 		for (int i = 0; i < N; ++i)
 		{
 			if (!s_known[i]) continue;
 			if (i == I_FOCUS && !s_techPush) continue;
 			if (isOurs(i)) continue;
 			// NVE always runs its Manual technique (TECHNIQUE 1); Auto and Player
-			// are ours. The sizes are the keyframe's, scaled by the Aperture.
+			// are ours and set its Distance.
 			const float out = i == I_FOCUS ? (float)TECH_MANUAL
 							: i == I_MOUSE ? 0.0f
-							: i == 14 ? sizeMax
-							: i == 12 ? sizeBlur
-							: i == I_APERTURE ? apEff                            // an old key's 1.38 is 100%, not a paper-thin focus
-							: i == I_DIST ? (autoD > 0.0f ? autoD : enbDistance(clampf(w.v[i], 0.3f, 200.0f), n))   // metres -> NVE's Distance
+							: i == I_APERTURE ? apEff
+							: i == I_DIST ? (autoD > 0.0f ? autoD : clampf(nveOfMetres(w.v[i]), kNveMin, kNveMax))
 							: w.v[i];
 			if (s_havePushed[i] && same(i, s_pushed[i], out)) continue;
 			if (writeValue(i, out))
@@ -1144,12 +1143,12 @@ namespace enbdof
 			s_nextStatus = nowS + 3000;
 			++s_statusLogs;
 			const LONG ef = s_enbFrames, gf = s_gameFrames;
-			const float sentD = autoD > 0.0f ? autoD : enbDistance(clampf(w.v[I_DIST], 0.3f, 200.0f), n);
-			logf("enb: playing (mode %d) at %.2f s - ENB drew %ld frame(s) in 3 s, the replay director ticked %ld; focus %s at %.1f m (%s); blur %.0f%%%s",
+			const float sentD = autoD > 0.0f ? autoD : clampf(nveOfMetres(w.v[I_DIST]), kNveMin, kNveMax);
+			logf("enb: playing (mode %d) at %.2f s - ENB drew %ld frame(s) in 3 s, the replay director ticked %ld; focus %s, distance %.2f (%s); aperture %.3f%s",
 				mode, game::replayTimeMs() * 0.001f, ef - s_lastEnbFrames, gf - s_lastGameFrames,
-				fm == FM_AUTO ? "Auto" : fm == FM_PLAYER ? "Player" : "Manual", metresOf(sentD, n),
-				byPlayer ? "the player" : autoD > 0.0f && !s_focusHeld ? "measured" : s_focusHeld ? "held - nothing measured" : "the keyframe's distance",
-				pctManual(apEff), w.v[I_ENABLED] < 0.5f ? " - Keyframe DOF off" : "");
+				fm == FM_AUTO ? "Auto" : fm == FM_PLAYER ? "Player" : "Manual", sentD,
+				byPlayer ? "the player" : autoD > 0.0f && !s_focusHeld ? "measured" : s_focusHeld ? "held" : "the keyframe's",
+				apEff, w.v[I_ENABLED] < 0.5f ? " - Keyframe DOF off" : "");
 			s_lastEnbFrames = ef;
 			s_lastGameFrames = gf;
 		}
@@ -1231,15 +1230,16 @@ namespace enbdof
 		}
 		const int fm = focusModeHere();
 		add(I_FOCUS);
-		if (fm == FM_MANUAL) add(I_DIST);
 		if (fm == FM_PLAYER) add(V_TARGET);
-		if (s_known[I_APERTURE]) add(V_APERTURE);
-		add(14);                                          // DOF : Maximum size  - what the blur reaches at 100%
-		add(12);                                          // Blur : Size         - its softening at 100%
-		add(I_NEAR);                                      // Near Field Blur: On / Off
+		add(I_DIST);                                      // ENB's Manual Focus : Distance - live in Auto and Player
+		add(I_APERTURE);                                  // ENB's own numbers from here on, sent as they are
+		add(12);                                          // Blur : Size
+		add(14);                                          // DOF : Maximum size
+		add(13);                                          // Blur : Quality Steps
+		add(I_NEAR);                                      // Blur the near field
 		{
 			bool o;
-			if (s_known[I_NEARPOWER] && valueHere(I_NEAR, &o) > 0.5f) add(V_NEAR);   // and how much, while it is on
+			if (valueHere(I_NEAR, &o) > 0.5f) add(I_NEARPOWER);   // its power, while it is on
 		}
 		add(11);                                          // Blur : Chromatic Spread
 		if (s_known[17] && s_known[18]) add(V_ANAMORPHIC);
@@ -1266,6 +1266,7 @@ namespace enbdof
 		case I_NEARPOWER:
 		case I_AUTO_NEARPOWER:  return "Near Field Power";
 		case 12: return "Blur Size";
+		case 13: return "Blur Quality";
 		case 14: return "Maximum Size";
 		case 11: return "Chromatic Spread";
 		case 17: return "Anamorphic";
@@ -1351,6 +1352,8 @@ namespace enbdof
 		}
 		Want w;
 		computeAt(t, w);
+		if (p == I_DIST && focusModeOf(w.v[I_FOCUS]) != FM_MANUAL && s_autoD > 0.0f && GetTickCount64() - s_autoAt < 120000)
+			return metresOfNve(s_autoD);                      // Auto / Player: the number being sent now
 		return p == I_DIST ? clampf(w.v[p], kDefs[p].lo, kDefs[p].hi) : w.v[p];
 	}
 
@@ -1370,15 +1373,17 @@ namespace enbdof
 		if (p == I_ENABLED) return cur > 0.5f ? 0.0f : 1.0f;
 		if (p == I_DIST)
 		{
-			float x = clampf(cur, d.lo, d.hi);
+			// in ENB's own number: 0.1 a press under 10, then 0.25, 0.5, 2
+			float x = clampf(nveOfMetres(cur), kNveMin, kNveMax);
 			const int dir = delta > 0 ? 1 : -1;
 			for (int k = 0, n = delta > 0 ? delta : -delta; k < n; ++k)
 			{
-				const float st = distStep(dir > 0 ? x : x - 0.001f);
+				const float y = dir > 0 ? x : x - 0.0001f;
+				const float st = y < 10.0f ? 0.1f : y < 30.0f ? 0.25f : y < 60.0f ? 0.5f : 2.0f;
 				x = floorf((x + (float)dir * st) / st + 0.5f) * st;
-				x = clampf(x, d.lo, d.hi);
+				x = clampf(x, kNveMin, kNveMax);
 			}
-			return floorf(x * 100.0f + 0.5f) / 100.0f;
+			return metresOfNve(floorf(x * 100.0f + 0.5f) / 100.0f);
 		}
 		if (d.kind == K_ENUM)
 		{
@@ -1513,14 +1518,12 @@ namespace enbdof
 			put(I_FOCUS, nv);
 			// Into Manual: start the distance where the focus was just now -
 			// the player, or the middle of the picture - not somewhere unknown.
-			if (focusModeOf(nv) == FM_MANUAL)
-			{
-				const float m = focusModeOf(cur) == FM_PLAYER && playerFresh() ? s_playerMetres : centreFresh() ? centreMetres() : 0.0f;
-				if (m > 0.0f) put(I_DIST, clampf(floorf(m * 100.0f + 0.5f) / 100.0f, kDefs[I_DIST].lo, kDefs[I_DIST].hi));
-			}
+			if (focusModeOf(nv) == FM_MANUAL && s_autoD > 0.0f && GetTickCount64() - s_autoAt < 120000)
+				put(I_DIST, metresOfNve(floorf(clampf(s_autoD, kNveMin, kNveMax) * 100.0f + 0.5f) / 100.0f));
 			break;
 		}
 		default:
+			if (p == I_DIST && focusModeHere() != FM_MANUAL) put(I_FOCUS, (float)FM_MANUAL);   // setting a distance is Manual
 			put(p, stepped(p, cur, delta));
 			break;
 		}
@@ -1543,7 +1546,7 @@ namespace enbdof
 			// Enter on Focus Distance: focus on what is in the middle of the picture
 			Want w;
 			computeAt(t, w);
-			const float m = clampf(floorf(centreMetres() * 100.0f + 0.5f) / 100.0f, kDefs[I_DIST].lo, kDefs[I_DIST].hi);
+			const float m = metresOfNve(floorf(clampf(distanceForRaw(s_centreRaw), kNveMin, kNveMax) * 100.0f + 0.5f) / 100.0f);
 			for (int k = 0; k < nt; ++k) lights::setEnbParam(lights::g_cur->enb, targets[k], I_DIST, m, w.v);
 			lights::markDirty();
 			return;
@@ -1640,12 +1643,12 @@ namespace enbdof
 	{
 		if (p == V_APERTURE) { snprintf(buf, cap, "%.0f%%", v); return buf; }
 		if (p == V_NEAR) { snprintf(buf, cap, "%.0f%%", v); return buf; }
-		if (p == V_ANAMORPHIC) { if (v <= 0.0f) return "Off"; snprintf(buf, cap, "%.2fx", v); return buf; }
+		if (p == V_ANAMORPHIC) { if (v <= 0.0f) return "Off"; snprintf(buf, cap, "%.2f", v); return buf; }
 		if (p == V_TARGET)
 		{
 			if (v > -1.5f && v < -0.5f) return "Auto";
 			if (v < -1.5f) return "Picked (not in view)";
-			snprintf(buf, cap, "Person %d of %d", (int)v + 1, s_peopleCount);
+			snprintf(buf, cap, "Person %d", (int)v + 1);
 			return buf;
 		}
 		if (p == I_ENABLED) return v > 0.5f ? "On" : "Off";
@@ -1654,22 +1657,11 @@ namespace enbdof
 		if (p == I_FOCUS)
 		{
 			const int fm = focusModeOf(v);
-			if (fm == FM_MANUAL) return "Manual";
-			if (fm == FM_PLAYER)
-			{
-				if (!playerFresh()) return "Player";
-				const float m = s_playerMetres;
-				snprintf(buf, cap, m < 10.0f ? "Player (%.1f m)" : "Player (%.0f m)", m);
-				return buf;
-			}
-			if (!centreFresh()) return "Auto";
-			const float m = centreMetres();
-			snprintf(buf, cap, m < 10.0f ? "Auto (%.1f m)" : "Auto (%.0f m)", m);
-			return buf;
+			return fm == FM_MANUAL ? "Manual" : fm == FM_PLAYER ? "Player" : "Auto";
 		}
 		if (d.kind == K_BOOL) return v > 0.5f ? "On" : "Off";
 		if (d.kind == K_INT) { snprintf(buf, cap, "%d", (int)floorf(v + 0.5f)); return buf; }
-		if (p == I_DIST) { snprintf(buf, cap, v < 10.0f ? "%.2f m" : "%.1f m", v); return buf; }
+		if (p == I_DIST) { snprintf(buf, cap, "%.2f", clampf(nveOfMetres(v), kNveMin, kNveMax)); return buf; }
 		snprintf(buf, cap, v < 1.0f ? "%.3f" : v < 100.0f ? "%.2f" : "%.1f", v);
 		return buf;
 	}
@@ -1679,15 +1671,15 @@ namespace enbdof
 	{
 		switch (p)
 		{
-		case I_ENABLED:         return "Blur on this keyframe. Off = no blur here.";
-		case I_FOCUS:           return "Auto: the middle of the screen. Manual: a distance. Player: a person.";
-		case V_TARGET:          return "Who to focus on. Left/right: the next person. The marker shows who.";
-		case I_DIST:            return centreFresh() ? "Focus distance in metres. Enter: focus on the middle." : "Focus distance in metres.";
+		case I_ENABLED:         return "Blur on this keyframe.";
+		case I_FOCUS:           return "Auto: the middle. Manual: your distance. Player: a person.";
+		case V_TARGET:          return "Who to focus on. Left/right: next person.";
+		case I_DIST:            return centreFresh() ? "ENB focus distance. Enter: focus on the middle." : "ENB focus distance.";
 		case V_APERTURE:        return "How much blur. 0% none, 100% the most.";
 		case V_NEAR:            return "How much blur in front of the focus.";
 		case V_ANAMORPHIC:      return "Oval bokeh. Off, or how stretched.";
 		case I_APERTURE:
-		case I_AUTO_APERTURE:   return "How much blur.";
+		case I_AUTO_APERTURE:   return "Blur strength. 0 = no blur.";
 		case I_NEAR:            return "Blur things in front of the focus too.";
 		case I_NEARPOWER:
 		case I_AUTO_NEARPOWER:  return "Higher = less blur in front of the focus.";
@@ -1696,9 +1688,9 @@ namespace enbdof
 		case 9:  return "Where the auto-focus looks, left to right.";
 		case 10: return "Where the auto-focus looks, top to bottom.";
 		case 11: return "Colour fringes in the blur.";
-		case 12: return "How soft the blur is at 100%.";
-		case 13: return "More steps, smoother blur, slower.";
-		case 14: return "How big the blur gets at 100%.";
+		case 12: return "Softness of the blur.";
+		case 13: return "Blur quality. Higher = smoother.";
+		case 14: return "Size of the blur.";
 		case 15: return "Bokeh quality.";
 		case 16: return "Lower renders the blur at less resolution - faster.";
 		case 17: return "Oval bokeh, like an anamorphic lens.";

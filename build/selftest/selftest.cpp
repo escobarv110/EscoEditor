@@ -696,20 +696,20 @@ int main(int argc, char** argv)
             ed::s_manual[ed::I_ENABLED] = 1.0f;
             ed::s_manual[ed::I_FOCUS] = 1.0f; ed::s_manual[ed::I_NEAR] = 1.0f; ed::s_manual[17] = 1.0f;
             ed::buildList();
-            const int wantManual[] = { ed::I_ENABLED, ed::I_FOCUS, ed::I_DIST, ed::V_APERTURE, 14, 12, ed::I_NEAR, ed::V_NEAR, 11, ed::V_ANAMORPHIC };
-            bool listOk = ed::listCount() == 10;
-            for (int k = 0; listOk && k < 10; ++k) if (ed::listParam(k) != wantManual[k]) listOk = false;
-            CHECK(listOk && ed::listParam(10) == -1, "Manual: Keyframe DOF, Focus Mode, Focus Distance, Aperture, Maximum Size, Blur Size, Near Field Blur + amount, Chromatic Spread, Anamorphic");
+            const int wantManual[] = { ed::I_ENABLED, ed::I_FOCUS, ed::I_DIST, ed::I_APERTURE, 12, 14, 13, ed::I_NEAR, ed::I_NEARPOWER, 11, ed::V_ANAMORPHIC };
+            bool listOk = ed::listCount() == 11;
+            for (int k = 0; listOk && k < 11; ++k) if (ed::listParam(k) != wantManual[k]) listOk = false;
+            CHECK(listOk && ed::listParam(11) == -1, "ENB's own rows: Keyframe DOF, Focus, Focus Distance, Aperture, Blur Size, Maximum Size, Blur Quality, Near Field Blur + Power, Chromatic Spread, Anamorphic");
             ed::s_manual[ed::I_FOCUS] = 0.0f; ed::s_manual[ed::I_NEAR] = 0.0f; ed::s_manual[17] = 0.0f;
             ed::buildList();
-            const int wantAuto[] = { ed::I_ENABLED, ed::I_FOCUS, ed::V_APERTURE, 14, 12, ed::I_NEAR, 11, ed::V_ANAMORPHIC };
-            bool autoOk = ed::listCount() == 8;
-            for (int k = 0; autoOk && k < 8; ++k) if (ed::listParam(k) != wantAuto[k]) autoOk = false;
-            CHECK(autoOk, "Auto: the same rows without a distance; Near Field Blur Off hides its amount");
+            const int wantAuto[] = { ed::I_ENABLED, ed::I_FOCUS, ed::I_DIST, ed::I_APERTURE, 12, 14, 13, ed::I_NEAR, 11, ed::V_ANAMORPHIC };
+            bool autoOk = ed::listCount() == 10;
+            for (int k = 0; autoOk && k < 10; ++k) if (ed::listParam(k) != wantAuto[k]) autoOk = false;
+            CHECK(autoOk, "Auto: the same rows - Focus Distance shows the number being sent; Near Field Blur Off hides its power");
             ed::s_manual[ed::I_FOCUS] = 2.0f;
             ed::buildList();
-            CHECK(ed::listCount() == 9 && ed::listParam(2) == ed::V_TARGET && ed::listParam(3) == ed::V_APERTURE,
-                  "Player: a Character row to pick who, and no distance row");
+            CHECK(ed::listCount() == 11 && ed::listParam(2) == ed::V_TARGET && ed::listParam(3) == ed::I_DIST,
+                  "Player: a Character row to pick who, then the distance being sent");
             ed::s_manual[ed::I_ENABLED] = 0.0f;
             ed::buildList();
             CHECK(ed::listCount() == 1 && ed::listParam(0) == ed::I_ENABLED && ed::reshapes(ed::I_ENABLED),
@@ -770,8 +770,8 @@ int main(int argc, char** argv)
                 CHECK(agrees, "and that is the same Distance the menu's metres give for it - the two ways agree");
                 ed::setCentre(0.01f);
                 char ab[24];
-                CHECK(ed::centreFresh() && !strncmp(ed::format(ed::I_FOCUS, 0.0f, ab, 24), "Auto (", 6) && !strcmp(ed::format(ed::I_FOCUS, 1.0f, ab, 24), "Manual"),
-                      "Focus Mode shows how far away the middle of the picture is while Auto (%s)", ed::format(ed::I_FOCUS, 0.0f, ab, 24));
+                CHECK(ed::centreFresh() && !strcmp(ed::format(ed::I_FOCUS, 0.0f, ab, 24), "Auto") && !strcmp(ed::format(ed::I_FOCUS, 1.0f, ab, 24), "Manual"),
+                      "Focus Mode reads just Auto / Manual / Player - the number is on the Focus Distance row (%s)", ed::format(ed::I_FOCUS, 0.0f, ab, 24));
                 ed::setCentre(2.0f);
                 CHECK(ed::s_centreRaw == 0.01f, "a depth outside 0..1 is not taken");
                 ed::s_centreAt = 0;
@@ -781,7 +781,7 @@ int main(int argc, char** argv)
             ed::s_manual[ed::I_NEARPOWER] = 2.0f;
             CHECK(fabsf(ed::valueHere(ed::V_NEAR, &own) - 50.0f) < 1e-3f && ed::reshapes(ed::I_NEAR) &&
                   !strcmp(ed::format(ed::V_NEAR, 30.0f, fb0, 16), "30%") && !strcmp(ed::format(ed::V_ANAMORPHIC, 0.0f, fb0, 16), "Off") &&
-                  !strcmp(ed::format(ed::V_ANAMORPHIC, 1.5f, fb0, 16), "1.50x") && !strcmp(ed::format(ed::V_APERTURE, 42.0f, fb0, 16), "42%"),
+                  !strcmp(ed::format(ed::V_ANAMORPHIC, 1.5f, fb0, 16), "1.50") && !strcmp(ed::format(ed::V_APERTURE, 42.0f, fb0, 16), "42%"),
                   "the combined rows read Off or their amount");
             ed::s_manual[17] = 1.0f; ed::s_manual[18] = 2.0f;
             CHECK(ed::valueHere(ed::V_ANAMORPHIC, &own) == 2.0f && ed::menuLabel(ed::V_ANAMORPHIC)[0] == 'A' && !ed::reshapes(ed::V_NEAR),
@@ -792,15 +792,19 @@ int main(int argc, char** argv)
                   ed::stepped(ed::I_FOCUS, 0.0f, 1) == 1.0f && ed::stepped(ed::I_FOCUS, 1.0f, 1) == 2.0f && ed::stepped(ed::I_FOCUS, 2.0f, 1) == 0.0f &&
                   ed::stepped(ed::I_FOCUS, 0.0f, -8) == 2.0f && ed::reshapes(ed::I_FOCUS),
                   "Focus Mode cycles Auto, Manual, Player - one a press however long it is held - and redraws the rows");
-            // Focus Distance: steps that suit it, in 0.3 .. 200 m
+            // Focus Distance: ENB's own number (4.22), shown and sent exactly
             {
-                const bool down = ed::stepped(ed::I_DIST, 38.9f, -1) == 35.0f && ed::stepped(ed::I_DIST, 10.0f, -1) == 9.75f;
-                const bool up = ed::stepped(ed::I_DIST, 4.1f, 1) == 4.25f && ed::stepped(ed::I_DIST, 0.95f, 1) == 1.0f && ed::stepped(ed::I_DIST, 9.75f, 1) == 10.0f;
-                const bool ends = ed::stepped(ed::I_DIST, 396.0f, -1) == 190.0f && ed::stepped(ed::I_DIST, 0.3f, -1) == 0.3f && ed::stepped(ed::I_DIST, 195.0f, 3) == 200.0f;
-                float x = 4.0f;
-                for (int k = 0; k < 8; ++k) x = ed::stepped(ed::I_DIST, x, 1);
-                CHECK(down && up && ends && x == 6.0f,
-                      "Focus Distance moves by 5 cm to 10 m as suits the distance, stays in 0.3..200 m (4.17's 396 m comes back to 190 m), 8 presses from 4 m is 6 m (%.2f)", x);
+                char db[16];
+                auto nve = [&](float m) { return ed::nveOfMetres(m); };
+                const bool shown = !strcmp(ed::format(ed::I_DIST, ed::metresOfNve(7.0f), db, 16), "7.00");
+                const float a = nve(ed::stepped(ed::I_DIST, ed::metresOfNve(7.0f), 1));
+                const float b = nve(ed::stepped(ed::I_DIST, ed::metresOfNve(10.0f), -1));
+                const float c = nve(ed::stepped(ed::I_DIST, ed::metresOfNve(20.0f), 1));
+                const float lo = nve(ed::stepped(ed::I_DIST, ed::metresOfNve(2.05f), -3));
+                const float hi = nve(ed::stepped(ed::I_DIST, ed::metresOfNve(149.0f), 5));
+                CHECK(shown && fabsf(a - 7.1f) < 1e-3f && fabsf(b - 9.9f) < 1e-3f && fabsf(c - 20.25f) < 1e-3f && fabsf(lo - 2.05f) < 1e-3f && fabsf(hi - 150.0f) < 1e-3f,
+                      "Focus Distance reads ENB's number (7.00) and steps in it: 0.1 under 10, 0.25 to 30, within 2.05..150 (%.2f %.2f %.2f %.2f %.2f)", a, b, c, lo, hi);
+                CHECK(fabsf(ed::nveOfMetres(ed::metresOfNve(12.34f)) - 12.34f) < 1e-3f, "and a number set is the number ENB gets back");
             }
             ed::kinds[ed::I_FOCUS] = (uint8_t)ed::kDefs[ed::I_FOCUS].kind;
             {
