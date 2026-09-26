@@ -1454,12 +1454,18 @@ namespace lightui
 
 	// reshade_overlay: every frame, on ReShade's render thread.
 	// Where Windows has the mouse, in ImGui's pixels. False when it cannot say.
+	// Not GetCursorPos: ReShade hooks it, and while input is blocked (the light
+	// editor blocks it) it hands everyone the position from before - (0, 0) in
+	// 4.23's log, so the arrow sat in the corner. GetCursorInfo is not hooked.
 	bool osMouse(reshade::api::effect_runtime* rt, const ImGuiIO& io, ImVec2* out)
 	{
-		POINT pt = {};
+		CURSORINFO ci = {};
+		ci.cbSize = sizeof(ci);
 		RECT rc = {};
 		const HWND hw = (HWND)rt->get_hwnd();
-		if (!hw || !GetCursorPos(&pt) || !ScreenToClient(hw, &pt) || !GetClientRect(hw, &rc) || rc.right <= 0 || rc.bottom <= 0) return false;
+		if (!hw || !GetCursorInfo(&ci)) return false;
+		POINT pt = ci.ptScreenPos;
+		if (!ScreenToClient(hw, &pt) || !GetClientRect(hw, &rc) || rc.right <= 0 || rc.bottom <= 0) return false;
 		*out = ImVec2(pt.x * io.DisplaySize.x / (float)rc.right, pt.y * io.DisplaySize.y / (float)rc.bottom);
 		return true;
 	}
@@ -1542,6 +1548,16 @@ namespace lightui
 		dl->AddTriangle(a, b, t, IM_COL32(0, 0, 0, 255), 2.0f * k);
 	}
 
+	bool g_openedOverlay = false;   // the editor opened ReShade's menu, so it closes it too
+	int  g_overlayLogs = 0;
+
+	void closeOverlay(reshade::api::effect_runtime* rt)
+	{
+		if (!g_openedOverlay) return;
+		g_openedOverlay = false;
+		rt->open_overlay(false, reshade::api::input_source::keyboard);
+	}
+
 	void onOverlay(reshade::api::effect_runtime* rt)
 	{
 		ImGuiIO& io = ImGui::GetIO();
@@ -1558,15 +1574,24 @@ namespace lightui
 			g_open = true;
 			g_closeArmed = false;
 			lights::toggleDone(GetTickCount64());   // the same press must not close it again
+			// Under FiveM ReShade gives its windows the mouse only while its own
+			// menu is open ("Cannot capture input for window ... created by a
+			// different process"), so the editor opens it - and closes it again
+			// with itself. Pressing INS did the same by hand.
+			if (g_cfg.lightsOpenReshade && rt->open_overlay(true, reshade::api::input_source::keyboard))
+			{
+				g_openedOverlay = true;
+				if (g_overlayLogs++ < 2) logf("lights: opened ReShade's menu with the light editor, so the mouse works in it - it closes with the editor");
+			}
 		}
 		const bool picked = captureKeys();
 
 		if (g_open && (!lights::g_ready || !editorOpen())) g_open = false;
-		if (!g_open) { closeState(); return; }
+		if (!g_open) { closeOverlay(rt); closeState(); return; }
 
 		lights::Lock lk;
 		lights::LightSet* S = lights::cur();
-		if (!S) { g_open = false; closeState(); return; }
+		if (!S) { g_open = false; closeOverlay(rt); closeState(); return; }
 		if (!g_openLogged) { g_openLogged = true; logf("lights: light editor opened (clip %d, %d light(s))", lights::g_curClip + 1, S->count); }
 
 		rt->block_input_next_frame();
@@ -1696,7 +1721,7 @@ namespace lightui
 		}
 		lights::g_uiOpen = g_open;
 		if (g_open) drawPointer(rt, io);
-		if (!g_open) closeState();
+		if (!g_open) { closeOverlay(rt); closeState(); }
 	}
 
 	// The "EscoEditor" tab in ReShade's own menu, drawn by ReShade while its menu is open.

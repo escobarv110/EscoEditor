@@ -1,4 +1,4 @@
-EscoEditor.asi 4.23  -  more control for the Rockstar Editor
+EscoEditor.asi 4.24  -  more control for the Rockstar Editor
 ======================================================================
 (formerly EditorCamSpeed.asi - same plugin, new name)
 
@@ -9,6 +9,19 @@ menu, adds scene lights you place in the picture with a 3D gizmo - fixed in
 the world, on the camera, or riding along with a ped, a vehicle or a prop -
 and keeps the free camera speed keys. The editor's own camera path,
 transitions, shake and depth of field are never touched.
+
+WHAT CHANGED IN 4.24
+  - The light editor's mouse works. Two things stood in the way, both
+    ReShade's under FiveM:
+      the arrow read the cursor with GetCursorPos, which ReShade hooks - and
+      while input is blocked (the editor blocks it) it answers with the old
+      position, (0, 0), so the arrow sat in the corner. It now reads
+      GetCursorInfo, which ReShade leaves alone;
+      ReShade gives its windows the mouse only while its own menu is open
+      (pressing INS made the editor work). The light editor now opens
+      ReShade's menu itself when it opens, and closes it again when it
+      closes. Collapse ReShade's window once if it is in the way - ReShade
+      remembers. LightsOpenReShade=0 in EscoEditor.ini turns this off.
 
 WHAT CHANGED IN 4.23
   - Fixed: a black video when exporting with Extended Video Export (EVE).
@@ -643,7 +656,7 @@ WHAT CHANGED IN 2.9
 
 CHECK YOU HAVE THIS VERSION
   The first line of EscoEditor.log (next to the .asi) must say
-  "EscoEditor 4.23".
+  "EscoEditor 4.24".
 
 INSTALL
   FiveM:          close FiveM, run Install.bat - or copy EscoEditor.asi
