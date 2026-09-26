@@ -328,7 +328,7 @@ namespace rs
 	{
 		F = lights::flares();
 		const ULONGLONG now = GetTickCount64();
-		return editorOpen() && F.count > 0 && F.at != 0 && (now - F.at) < 5000;
+		return editorOpen() && !game::exporting() && F.count > 0 && F.at != 0 && (now - F.at) < 5000;
 	}
 
 	// --- drawing it before the menus ------------------------------------------
@@ -507,6 +507,9 @@ namespace rs
 		// technique on while ReShade is still loading its effects made it draw
 		// a pass whose resources did not exist yet - a null read inside
 		// ReShade, dxgi.dll+1131CC, on every start with the ENB option on (4.19).
+		// An export starting between frames: switched off before ReShade draws
+		// (switching off is safe here; it is switching ON mid-frame that is not)
+		if (game::exporting() && e->focusTech.handle && rt->get_technique_state(e->focusTech)) rt->set_technique_state(e->focusTech, false);
 		e->focusOn = e->focusTech.handle && e->focusTex.handle && rt->get_technique_state(e->focusTech);
 
 		lights::FlareSet F;
@@ -554,12 +557,40 @@ namespace rs
 	// ten after EscoFlare.fx was first seen if that word never comes.
 	int g_focusSwitchLogs = 0;
 
+	// Extended Video Export takes an export's frames at Present, after ReShade.
+	// If the game's Export cannot be recognised on this build, EscoFocus stays
+	// off altogether while EVE is there - no measuring beats a black export.
+	bool eveLoaded()
+	{
+		static ULONGLONG s_next = 0;
+		static bool s_eve = false;
+		const ULONGLONG now = GetTickCount64();
+		if (now >= s_next) { s_next = now + 5000; s_eve = GetModuleHandleA("ExtendedVideoExport.asi") != nullptr; }
+		return s_eve;
+	}
+	bool focusBlocked()
+	{
+		static bool s_logged = false;
+		const bool blocked = eveLoaded() && !game::a_PlaybackType;
+		if (blocked && !s_logged)
+		{
+			s_logged = true;
+			logf("reshade: Extended Video Export is loaded and the game's Export could not be recognised on this build - "
+				 "EscoFocus stays off (Auto focus and Enter on Focus Distance have nothing to measure; Manual and Player work)");
+		}
+		return blocked;
+	}
+
 	void focusSwitch(Entry& e)
 	{
 		if (!e.found || !e.focusTech.handle || !e.focusTex.handle) return;
 		const ULONGLONG now = GetTickCount64();
 		const bool settled = e.loadedAt ? now - e.loadedAt > 3000 : (e.foundAt && now - e.foundAt > 10000);
-		const bool want = &e == mainEntry() && settled && g_cfg.enbMeasure && enbdof::wantsCentre() && replayMode() > 0 && e.rt->get_effects_state();   // any replay: the editor, playback, an export
+		// Never during the game's Export: Extended Video Export takes the frame at
+		// Present, after ReShade, and with EscoFocus on ReShade ran its whole
+		// effect pass in the middle of that - the export came out black (4.23).
+		// Auto focus holds its last measurement through an export instead.
+		const bool want = &e == mainEntry() && settled && g_cfg.enbMeasure && enbdof::wantsCentre() && replayMode() > 0 && !game::exporting() && !focusBlocked() && e.rt->get_effects_state();
 		if (e.rt->get_technique_state(e.focusTech) == want) return;
 		e.rt->set_technique_state(e.focusTech, want);
 		if (g_focusSwitchLogs < 6) { ++g_focusSwitchLogs; logf("reshade: EscoFocus %s", want ? "on - measuring the middle of the picture for the ENB focus" : "off"); }

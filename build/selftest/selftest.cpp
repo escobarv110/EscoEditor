@@ -1097,6 +1097,25 @@ int main(int argc, char** argv)
         lt::clearStore();
     }
 
+    // ---- the game's Export, recognised: nothing through ReShade while it runs (4.23) --
+    {
+        int type = 1;
+        uint8_t active = 1;
+        game::a_PlaybackType = (uintptr_t)&type;
+        game::a_PlaybackActive = (uintptr_t)&active;
+        const bool bake = game::exporting();
+        type = 0;
+        const bool preview = game::exporting();
+        type = 1; active = 0;
+        const bool closed = game::exporting();
+        game::a_PlaybackActive = 0; active = 1;
+        const bool noFlag = game::exporting();
+        game::a_PlaybackType = 0;
+        const bool unknown = game::exporting();
+        CHECK(bake && !preview && !closed && noFlag && !unknown,
+              "Export (BAKE, active) is recognised; a preview, a closed playback, or a build where it cannot be found are not");
+    }
+
     // ---- a light that flashes ------------------------------------------------------
     {
         namespace lt = lights;

@@ -454,6 +454,17 @@ namespace game
 	constexpr uint8_t OP_MOV_RDI_MEM[] = { 0x48, 0x8B, 0x3D };
 	constexpr uint8_t OP_CVTTSS2SI[]   = { 0xF3, 0x48, 0x0F, 0x2C, 0x0D };
 
+	// CVideoEditorPlayback::Open(type, clip) opens by storing "a playback is
+	// active" and its type; type 1 is BAKE - the game's own Export, the one
+	// Extended Video Export captures at Present. Pattern and offsets after
+	// Rockstar Editor+'s notes; the opcodes are checked on the running image.
+	const char* kPlaybackOpen =
+		"40 53 48 83 EC 20 48 8B 05 ? ? ? ? 89 15 ? ? ? ? 4C 8D 05 ? ? ? ? 48 F7 D8 C6 05 ? ? ? ? 01 89 0D";
+	constexpr uint8_t OP_MOV_MEM_ECX[]  = { 0x89, 0x0D };
+	constexpr uint8_t OP_MOV_MEM_BYTE[] = { 0xC6, 0x05 };
+	constexpr int     PLAYBACK_BAKE = 1;
+	uintptr_t a_PlaybackOpen = 0, a_PlaybackType = 0, a_PlaybackActive = 0;
+
 	uintptr_t a_PopulateCameraMenu = 0, a_GetCurrentEditMarker = 0, a_GetCurrentClip = 0;
 	uintptr_t a_EditMarkerIndex = 0, a_GetNextMarkerIndex = 0, a_MarkerStorage = 0;
 	uintptr_t a_WeatherExtract = 0, a_TcTable = 0, a_ReplayTimeMs = 0;
@@ -504,6 +515,32 @@ namespace game
 			a_MarkerStorage = derive(a_GetNextMarkerIndex, 0x19, 0x1C, OP_MOV_RDI_MEM, 3, "g_ReplayMarkerStorage");
 		a_WeatherExtract = scanFn(kWeather, "CPacketWeather::Extract");
 		a_TcTable        = scanFn(kTcTable, "TimecycleVarTable");
+		a_PlaybackOpen   = scanFn(kPlaybackOpen, "PlaybackOpen");
+		if (a_PlaybackOpen)
+		{
+			a_PlaybackType = derive(a_PlaybackOpen, 0x24, 0x26, OP_MOV_MEM_ECX, 2, "g_PlaybackType");
+			// `mov byte [rip+d], 1`: the displacement is followed by the 1, so the
+			// next instruction - what d counts from - starts one byte later
+			if (!memcmp((const void*)(a_PlaybackOpen + 0x1D), OP_MOV_MEM_BYTE, 2) && *(const uint8_t*)(a_PlaybackOpen + 0x23) == 1)
+			{
+				int32_t d = 0;
+				memcpy(&d, (const void*)(a_PlaybackOpen + 0x1F), 4);
+				const uintptr_t a = a_PlaybackOpen + 0x24 + (intptr_t)d;
+				if (a >= g_modBase && a < g_modBase + g_modSize) { a_PlaybackActive = a; logf("  %-22s rva 0x%llX", "g_PlaybackActive", rva(a)); }
+			}
+		}
+	}
+
+	// The game's own Export is running: its playback is open as BAKE.
+	bool exporting()
+	{
+		if (!a_PlaybackType) return false;
+		__try
+		{
+			const bool active = a_PlaybackActive ? *(volatile const uint8_t*)a_PlaybackActive != 0 : true;
+			return active && *(volatile const int*)a_PlaybackType == PLAYBACK_BAKE;
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER) { return false; }
 	}
 
 	// The marker whose menu is open (top-level marker menu or a submenu).

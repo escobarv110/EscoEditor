@@ -1,4 +1,4 @@
-EscoEditor.asi 4.22  -  more control for the Rockstar Editor
+EscoEditor.asi 4.23  -  more control for the Rockstar Editor
 ======================================================================
 (formerly EditorCamSpeed.asi - same plugin, new name)
 
@@ -9,6 +9,19 @@ menu, adds scene lights you place in the picture with a 3D gizmo - fixed in
 the world, on the camera, or riding along with a ped, a vehicle or a prop -
 and keeps the free camera speed keys. The editor's own camera path,
 transitions, shake and depth of field are never touched.
+
+WHAT CHANGED IN 4.23
+  - Fixed: a black video when exporting with Extended Video Export (EVE).
+    EVE takes each frame of the game's Export at Present, after ReShade. With
+    the ENB option on, EscoEditor kept a small ReShade pass switched on (the
+    one that measures the middle of the picture for Auto focus) - so ReShade,
+    which draws nothing otherwise, ran its whole effect pass in the middle of
+    EVE's capture. Now EscoEditor recognises the game's Export and draws
+    nothing through ReShade while it runs (no measuring, no lens flares).
+    ENB still gets its values, so the ENB depth of field is in the export;
+    Auto focus keeps the focus it last measured. EscoEditor.log says "the
+    game's Export started" / "ended". If the Export cannot be recognised on a
+    build and EVE is loaded, the measuring pass simply stays off.
 
 WHAT CHANGED IN 4.22
   - ENB's own numbers. Every ENB row shows and sends exactly the number
@@ -630,7 +643,7 @@ WHAT CHANGED IN 2.9
 
 CHECK YOU HAVE THIS VERSION
   The first line of EscoEditor.log (next to the .asi) must say
-  "EscoEditor 4.22".
+  "EscoEditor 4.23".
 
 INSTALL
   FiveM:          close FiveM, run Install.bat - or copy EscoEditor.asi

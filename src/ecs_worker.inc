@@ -179,6 +179,16 @@ DWORD WINAPI Worker(LPVOID)
 		}
 
 		const int mode = replayMode(), idx = editIndex();
+		{
+			static bool s_wasExporting = false;
+			const bool exp = game::exporting();
+			if (exp != s_wasExporting)
+			{
+				s_wasExporting = exp;
+				logf("state: the game's Export %s", exp ? "started - EscoEditor draws nothing through ReShade until it ends (ENB still gets its values)"
+													: "ended");
+			}
+		}
 		if (mode != lastMode)
 		{
 			logf("state: replay mode %d -> %d", lastMode, mode);
