@@ -179,6 +179,72 @@ namespace lightui
 		return under;
 	}
 
+	// Every greenscreen's outline (the shader paints the screen itself), and the
+	// lines where a cyc's corner meets its wall and its floor.
+	void drawScreens(ImDrawList* dl, const lights::View& v, const lights::LightSet& S, const lights::Ctx& c)
+	{
+		for (int i = 0; i < S.count; ++i)
+		{
+			const lights::Light& L = S.l[i];
+			if (L.type != lights::T_SCREEN) continue;
+			const bool sel = L.id == g_sel;
+			lights::Params P;
+			lights::ScreenGeo g;
+			if (!worldOf(L, sel ? shownParams(L, c) : lights::evalLight(L, c.now), P) || !lights::screenWorld(L, P, g)) continue;
+			float sh, ql;
+			lights::screenSpan(g, &sh, &ql);
+			const ImU32 col = !L.enabled ? IM_COL32(120, 120, 120, 150) : sel ? kHot : IM_COL32(255, 255, 255, 150);
+			const float th = sel ? 2.5f : 1.5f;
+			auto line = [&](float s0, float q0, float s1, float q1)
+			{
+				constexpr int kSeg = 24;
+				ImVec2 prev;
+				bool havePrev = false;
+				for (int k = 0; k <= kSeg; ++k)
+				{
+					const float u = (float)k / kSeg;
+					float w[3], p2[2];
+					lights::screenPoint(g, s0 + (s1 - s0) * u, q0 + (q1 - q0) * u, w);
+					const bool ok = lights::toScreen(v, w, p2);
+					const ImVec2 at(p2[0], p2[1]);
+					if (ok && havePrev) dl->AddLine(prev, at, col, th);
+					prev = at;
+					havePrev = ok;
+				}
+			};
+			line(-sh, 0.0f, sh, 0.0f);
+			line(-sh, ql, sh, ql);
+			line(-sh, 0.0f, -sh, ql);
+			line(sh, 0.0f, sh, ql);
+			if (g.shape == lights::SH_CYC && g.corner > 0.01f)
+			{
+				const float l1 = g.depth - g.corner, l2 = l1 + g.corner * 1.5707963f;
+				line(-sh, l1, sh, l1);
+				line(-sh, l2, sh, l2);
+			}
+		}
+	}
+
+	// The screen whose surface is under the mouse, nearest first; 0 for none.
+	uint32_t screenUnder(const lights::View& v, const lights::LightSet& S, const lights::Ctx& c, const ImVec2& mouse)
+	{
+		float rd[3];
+		lights::rayAt(v, mouse.x, mouse.y, rd);
+		uint32_t under = 0;
+		float best = 3e38f;
+		for (int i = 0; i < S.count; ++i)
+		{
+			const lights::Light& L = S.l[i];
+			if (L.type != lights::T_SCREEN) continue;
+			lights::Params P;
+			lights::ScreenGeo g;
+			float t;
+			if (!worldOf(L, L.id == g_sel ? shownParams(L, c) : lights::evalLight(L, c.now), P) || !lights::screenWorld(L, P, g)) continue;
+			if (lights::screenHit(g, c.cam.pos, rd, &t, nullptr, nullptr) && t < best) { best = t; under = L.id; }
+		}
+		return under;
+	}
+
 	// While picking: every ped, vehicle and prop near the camera as a box with
 	// its kind and distance. Returns the one under the mouse, or -1.
 	// `only` >= 0 draws just that one (the row the mouse is on in the list);
@@ -1047,6 +1113,9 @@ namespace lightui
 		ImGui::SameLine();
 		if (ImGui::Button("Add spot")) selectAdded(S, lights::addLight(S, lights::T_SPOT, cam));
 		tip("A new light 1.5 m in front of the camera, aimed where the camera looks.");
+		ImGui::SameLine();
+		if (ImGui::Button("Add screen")) selectAdded(S, lights::addLight(S, lights::T_SCREEN, cam));
+		tip("A greenscreen 6 m in front of the camera, facing it. It stays where it is put while the camera moves, people and cars in front of it stay in front, and its colour is flat in any light - for keying afterwards.");
 		int si = lights::indexOf(S, g_sel);
 		ImGui::SameLine();
 		if (ImGui::Button("Duplicate") && si >= 0) selectAdded(S, lights::duplicateLight(S, si));
@@ -1110,7 +1179,7 @@ namespace lightui
 			if (ImGui::Checkbox("##on", &L.enabled)) lights::markDirty();
 			ImGui::SameLine();
 			char label[96];
-			snprintf(label, sizeof(label), "%s  (%s%s%s)", L.name, L.type == lights::T_SPOT ? "spot" : "point", L.nkeys ? ", animated" : "",
+			snprintf(label, sizeof(label), "%s  (%s%s%s)", L.name, L.type == lights::T_SPOT ? "spot" : L.type == lights::T_SCREEN ? "screen" : "point", L.nkeys ? ", animated" : "",
 				L.at.mode == lights::A_CAMERA ? ", on the camera" : L.at.mode == lights::A_ENTITY ? ", attached" : "");
 			if (ImGui::Selectable(label, L.id == g_sel)) g_sel = L.id;
 			ImGui::PopID();
@@ -1133,14 +1202,19 @@ namespace lightui
 		}
 		lights::Light& L = S.l[si];
 		const bool spot = L.type == lights::T_SPOT;
+		const bool screen = L.type == lights::T_SCREEN;
+		const bool aim = spot || screen;   // has a direction: rotate works
 		ImGui::Separator();
 		if (ImGui::InputText("Name", L.name, sizeof(L.name))) lights::markDirty();
 		tip("Only a name, so you can tell your lights apart in the list and in the picture.");
-		if (ImGui::RadioButton("Point", !spot)) { L.type = lights::T_POINT; lights::markDirty(); }
-		tip("Shines in every direction from where it is, like a bulb.");
-		ImGui::SameLine();
-		if (ImGui::RadioButton("Spot", spot)) { L.type = lights::T_SPOT; lights::markDirty(); }
-		tip("Shines in a cone you can aim: Rotation below, or the Rotate gizmo (E).");
+		if (!screen)
+		{
+			if (ImGui::RadioButton("Point", !spot)) { L.type = lights::T_POINT; lights::markDirty(); }
+			tip("Shines in every direction from where it is, like a bulb.");
+			ImGui::SameLine();
+			if (ImGui::RadioButton("Spot", spot)) { L.type = lights::T_SPOT; lights::markDirty(); }
+			tip("Shines in a cone you can aim: Rotation below, or the Rotate gizmo (E).");
+		}
 
 		// --- what it follows, where it is, where it points, how big it is
 		ImGui::SeparatorText("Transform");
@@ -1155,23 +1229,33 @@ namespace lightui
 		ImGui::AlignTextToFramePadding();
 		ImGui::TextDisabled("Gizmo");
 		ImGui::SameLine();
-		if (ImGui::RadioButton("Move (W)", g_mode == 0 || (g_mode == 1 && !spot))) g_mode = 0;
+		if (ImGui::RadioButton("Move (W)", g_mode == 0 || (g_mode == 1 && !aim))) g_mode = 0;
 		tip("Arrows in the picture move the light along X, Y and Z; the white square moves it across the screen.");
 		ImGui::SameLine();
-		ImGui::BeginDisabled(!spot);
-		if (ImGui::RadioButton("Rotate (E)", g_mode == 1 && spot)) g_mode = 1;
-		tip("Rings in the picture aim a spot. A point light has no direction.");
+		ImGui::BeginDisabled(!aim);
+		if (ImGui::RadioButton("Rotate (E)", g_mode == 1 && aim)) g_mode = 1;
+		tip(screen ? "Rings in the picture turn the screen: the Z ring turns it round, X and Y tilt it." : "Rings in the picture aim a spot. A point light has no direction.");
 		ImGui::EndDisabled();
 		ImGui::SameLine();
 		if (ImGui::RadioButton("Scale (R)", g_mode == 2)) g_mode = 2;
-		tip("Drag the gizmo right or up to make the light bigger, left or down to make it smaller.");
+		tip(screen ? "Drag the gizmo right or up to make the whole screen bigger, left or down to make it smaller." : "Drag the gizmo right or up to make the light bigger, left or down to make it smaller.");
 
 		static const Axis kPos[3] = { { "X %.2f", 0.0f, 0.0f }, { "Y %.2f", 0.0f, 0.0f }, { "Z %.2f", 0.0f, 0.0f } };
 		const float posStep = haveCam ? lights::clampf(distToCam(L, c) * 0.004f, 0.02f, 1.0f) : 0.05f;
 		dragAxes(1, attached ? "Offset" : "Position", e.pos, 3, posStep, kPos);
 		tip(attached ? "Metres from what it follows: X to its right, Y ahead of it, Z above it.\nCtrl+click a field to type a number."
+					 : screen ? "Where the middle of the screen's bottom edge is, in metres: X east, Y north, Z up. Put Z on the ground and it stands on it.\nCtrl+click a field to type a number."
 					 : "World position in metres: X east, Y north, Z up.\nCtrl+click a field to type a number.");
-		if (spot)
+		if (screen)
+		{
+			float yaw, pitch;
+			lights::yawPitchFromDir(e.dir, &yaw, &pitch);
+			float rot[2] = { pitch, yaw };
+			static const Axis kRotS[2] = { { "X %.1f deg", -89.9f, 89.9f }, { "Z %.1f deg", -180.0f, 180.0f } };
+			if (dragAxes(2, "Rotation", rot, 2, 0.5f, kRotS)) lights::dirFromYawPitch(rot[1], rot[0], e.dir);
+			tip("Which way the screen's front faces: Z turns it round (0 = its front faces north), X tilts it back or forward.");
+		}
+		else if (spot)
 		{
 			float yaw, pitch;
 			lights::yawPitchFromDir(e.dir, &yaw, &pitch);
@@ -1184,13 +1268,42 @@ namespace lightui
 		else ImGui::TextDisabled("Rotation: a point light shines every way (a Spot can be aimed).");
 		float sc = lights::scaleOf(e);
 		if (ImGui::DragFloat("Scale", &sc, 0.01f, 0.05f, 20.0f, "%.2f x")) e.scale = lights::clampf(sc, 0.05f, 20.0f);
-		tip("Makes the whole light bigger or smaller: it reaches Range x Scale.\nA spot keeps its cone's angles.");
-		ImGui::SameLine();
-		ImGui::TextDisabled("reaches %.1f m", lights::reachOf(e));
+		if (screen)
+		{
+			tip("Sizes the whole screen at once: width, height, floor, corner and markers.");
+			ImGui::SameLine();
+			ImGui::TextDisabled("%.1f x %.1f m", lights::clampf(e.intensity, 0.05f, 500.0f) * sc, lights::clampf(e.range, 0.05f, 500.0f) * sc);
+		}
+		else
+		{
+			tip("Makes the whole light bigger or smaller: it reaches Range x Scale.\nA spot keeps its cone's angles.");
+			ImGui::SameLine();
+			ImGui::TextDisabled("reaches %.1f m", lights::reachOf(e));
+		}
 
 		// placed from where the camera is: world numbers, into the light's frame
 		ImGui::BeginDisabled(!haveCam || !fok);
-		if (ImGui::Button("To camera"))
+		if (screen)
+		{
+			float f[3] = { c.cam.fwd[0], c.cam.fwd[1], 0.0f };
+			const bool level = lights::norm3(f);
+			if (ImGui::Button("Face the camera") && level)
+			{
+				const float back[3] = { -f[0], -f[1], 0.0f };
+				putDir(e, F, back);
+			}
+			tip("Turns the screen round to face the camera, standing straight.");
+			ImGui::SameLine();
+			if (ImGui::Button("6 m ahead") && level)
+			{
+				float wp[3];
+				for (int i = 0; i < 3; ++i) wp[i] = c.cam.pos[i] + f[i] * 6.0f;
+				wp[2] -= 1.6f;
+				putPos(e, F, wp);
+			}
+			tip("Puts it 6 m in front of the camera, its bottom edge 1.6 m below the camera.");
+		}
+		else if (ImGui::Button("To camera"))
 		{
 			putPos(e, F, c.cam.pos);
 			if (spot) putDir(e, F, c.cam.fwd);
@@ -1209,164 +1322,226 @@ namespace lightui
 		}
 		ImGui::EndDisabled();
 
-		// --- what it looks like
-		ImGui::SeparatorText("Light");
-		ImGui::ColorEdit3("Colour", e.col);
-		tip("The colour of the light. Click the square for the full picker.");
-		ImGui::DragFloat("Intensity", &e.intensity, 0.1f, 0.0f, 2000.0f, "%.1f");
-		tip("How bright it is. A room light is around 5 - 20, a stage light hundreds.");
-		ImGui::DragFloat("Range", &e.range, 0.1f, 0.1f, 500.0f, "%.1f m");
-		tip("How far it reaches at Scale 1.");
-		ImGui::DragFloat("Falloff", &e.falloff, 0.05f, 0.1f, 64.0f, "%.2f");
-		tip("How fast it dims towards its range. Low = a soft even wash, high = a tight pool of light.");
-		if (spot)
+		// --- a greenscreen's own look
+		if (screen)
 		{
-			ImGui::DragFloat("Cone inner", &e.inner, 0.2f, 1.0f, 88.0f, "%.1f deg");
-			tip("The bright middle of the beam. Close to the outer angle = a hard edge.");
-			ImGui::DragFloat("Cone outer", &e.outer, 0.2f, 2.0f, 89.0f, "%.1f deg");
-			tip("How wide the beam is. 89 degrees is nearly a half sphere.");
+			ImGui::SeparatorText("Screen");
+			const int shape = lights::shapeOf(L.flags);
+			ImGui::AlignTextToFramePadding();
+			ImGui::TextDisabled("Shape");
+			for (int k = 0; k < lights::SH_COUNT; ++k)
+			{
+				ImGui::SameLine();
+				if (ImGui::RadioButton(lights::shapeName(k), shape == k)) { L.flags = lights::withShape(L.flags, k); lights::markDirty(); }
+			}
+			tip("Flat: a plain wall.\nCurved: the wall bent round towards the camera.\nCyc: a wall and a floor joined by a rounded corner - no edge on the ground, for full-body shots.");
+			ImGui::ColorEdit3("Colour", e.col);
+			tip("The screen's colour. It is not lit by the game: the same in day, night, rain or a dark room.\nClick the square for the full picker.");
+			if (ImGui::Button("Green")) { e.col[0] = 0.0f; e.col[1] = 177.0f / 255.0f; e.col[2] = 64.0f / 255.0f; }
+			tip("Chroma green: 0, 177, 64.");
+			ImGui::SameLine();
+			if (ImGui::Button("Blue")) { e.col[0] = 0.0f; e.col[1] = 71.0f / 255.0f; e.col[2] = 187.0f / 255.0f; }
+			tip("Chroma blue: 0, 71, 187.");
+			ImGui::DragFloat("Width", &e.intensity, 0.05f, 0.1f, 500.0f, "%.2f m");
+			tip("How wide it is (before Scale).");
+			ImGui::DragFloat("Height", &e.range, 0.05f, 0.1f, 500.0f, "%.2f m");
+			tip("How tall it is (before Scale).");
+			if (shape == lights::SH_CURVED)
+			{
+				ImGui::DragFloat("Curve", &e.falloff, 0.5f, 1.0f, 180.0f, "%.0f deg");
+				tip("How far it bends round: 1 is nearly flat, 180 a half circle round the camera's side. The width stays the distance from end to end.");
+			}
+			if (shape == lights::SH_CYC)
+			{
+				ImGui::DragFloat("Floor depth", &e.inner, 0.05f, 0.0f, 500.0f, "%.2f m");
+				tip("How far the floor reaches out in front of the wall.");
+				ImGui::DragFloat("Corner", &e.outer, 0.01f, 0.0f, 100.0f, "%.2f m");
+				tip("The radius of the rounded corner between wall and floor. 0 is a hard corner.");
+			}
+			const int marks = lights::marksOf(L.flags);
+			ImGui::AlignTextToFramePadding();
+			ImGui::TextDisabled("Markers");
+			for (int k = 0; k < lights::MK_COUNT; ++k)
+			{
+				ImGui::SameLine();
+				if (ImGui::RadioButton(lights::marksName(k), marks == k)) { L.flags = lights::withMarks(L.flags, k); lights::markDirty(); }
+			}
+			tip("Tracking markers on the screen, in a darker shade of its colour, so a camera move can be tracked afterwards.");
+			if (marks != lights::MK_OFF)
+			{
+				ImGui::DragFloat("Marker spacing", &e.volInt, 0.01f, 0.05f, 100.0f, "%.2f m");
+				tip("How far apart the markers are.");
+				ImGui::DragFloat("Marker size", &e.volSize, 0.005f, 0.005f, 20.0f, "%.3f m");
+				tip("How big each marker is.");
+			}
+			if (!lights::g_flareLive)
+				ImGui::TextDisabled("Waiting for ReShade to load EscoFlare.fx - only the outline shows until then.");
 		}
-		if (L.flags & lights::LF_VOLUME)
+
+		if (!screen)
 		{
-			ImGui::DragFloat("Volume intensity", &e.volInt, 0.01f, 0.0f, 20.0f, "%.2f");
-			tip("How strong the haze in the air is.");
-			ImGui::DragFloat("Volume size", &e.volSize, 0.01f, 0.01f, 20.0f, "%.2f");
-			tip("How big that haze is next to the light itself.");
+			// --- what it looks like
+			ImGui::SeparatorText("Light");
+			ImGui::ColorEdit3("Colour", e.col);
+			tip("The colour of the light. Click the square for the full picker.");
+			ImGui::DragFloat("Intensity", &e.intensity, 0.1f, 0.0f, 2000.0f, "%.1f");
+			tip("How bright it is. A room light is around 5 - 20, a stage light hundreds.");
+			ImGui::DragFloat("Range", &e.range, 0.1f, 0.1f, 500.0f, "%.1f m");
+			tip("How far it reaches at Scale 1.");
+			ImGui::DragFloat("Falloff", &e.falloff, 0.05f, 0.1f, 64.0f, "%.2f");
+			tip("How fast it dims towards its range. Low = a soft even wash, high = a tight pool of light.");
+			if (spot)
+			{
+				ImGui::DragFloat("Cone inner", &e.inner, 0.2f, 1.0f, 88.0f, "%.1f deg");
+				tip("The bright middle of the beam. Close to the outer angle = a hard edge.");
+				ImGui::DragFloat("Cone outer", &e.outer, 0.2f, 2.0f, 89.0f, "%.1f deg");
+				tip("How wide the beam is. 89 degrees is nearly a half sphere.");
+			}
+			if (L.flags & lights::LF_VOLUME)
+			{
+				ImGui::DragFloat("Volume intensity", &e.volInt, 0.01f, 0.0f, 20.0f, "%.2f");
+				tip("How strong the haze in the air is.");
+				ImGui::DragFloat("Volume size", &e.volSize, 0.01f, 0.01f, 20.0f, "%.2f");
+				tip("How big that haze is next to the light itself.");
+			}
 		}
 		if (memcmp(&e, &before, sizeof(e)) != 0)
 			if (lights::Params* T = editTarget(L, c)) { *T = e; lights::markDirty(); }
 
-		flagBox("Shadows", L, lights::LF_SHADOWS, "The light casts shadows. The game shadows only 8 lights in view at a time.");
-		ImGui::SameLine();
-		flagBox("Sharper shadow", L, lights::LF_HIRES, "Gives this light first pick of those 8 shadow slots, at a higher resolution.");
-		flagBox("Volumetric", L, lights::LF_VOLUME, "Draws the light in the air - the visible beam or haze - and adds its two values above.");
-		ImGui::SameLine();
-		flagBox("No reflections", L, lights::LF_NOSPEC, "No shiny highlight on wet roads, cars and glass from this light.");
-		ImGui::SameLine();
-		flagBox("Lit in a blackout", L, lights::LF_BLACKOUT, "Keeps the light on while the game has the city lights switched off.");
-		flagBox("From the sun", L, lights::LF_SUN, "The engine works this light's colour and brightness out from the sun at the clip's hour, so it follows sunrise, noon and dusk by itself - a little sun of its own. Time of Day on the EscoEditor menu drives it.");
-
-		// --- flashing
-		ImGui::SeparatorText("Flash");
+		if (!screen)
 		{
-			bool fch = false;
-			int fm = (int)(L.fx.mode + 0.5f);
-			if (fm < 0 || fm >= lights::FX_COUNT) fm = 0;
-			ImGui::SetNextItemWidth(160.0f);
-			if (ImGui::BeginCombo("Flash", lights::flashName(fm)))
+			flagBox("Shadows", L, lights::LF_SHADOWS, "The light casts shadows. The game shadows only 8 lights in view at a time.");
+			ImGui::SameLine();
+			flagBox("Sharper shadow", L, lights::LF_HIRES, "Gives this light first pick of those 8 shadow slots, at a higher resolution.");
+			flagBox("Volumetric", L, lights::LF_VOLUME, "Draws the light in the air - the visible beam or haze - and adds its two values above.");
+			ImGui::SameLine();
+			flagBox("No reflections", L, lights::LF_NOSPEC, "No shiny highlight on wet roads, cars and glass from this light.");
+			ImGui::SameLine();
+			flagBox("Lit in a blackout", L, lights::LF_BLACKOUT, "Keeps the light on while the game has the city lights switched off.");
+			flagBox("From the sun", L, lights::LF_SUN, "The engine works this light's colour and brightness out from the sun at the clip's hour, so it follows sunrise, noon and dusk by itself - a little sun of its own. Time of Day on the EscoEditor menu drives it.");
+
+			// --- flashing
+			ImGui::SeparatorText("Flash");
 			{
-				for (int m = 0; m < lights::FX_COUNT; ++m)
-					if (ImGui::Selectable(lights::flashName(m), m == fm))
-					{
-						if (fm == lights::FX_OFF && m != lights::FX_OFF) lights::flashFill(L.fx);
-						L.fx.mode = (float)m;
-						fm = m;
-						fch = true;
-					}
-				ImGui::EndCombo();
-			}
-			tip("Makes the light flash - it and its flare:\n"
-				"Blink - on, then off.  Strobe - a short hard flash each beat.  Pulse - fades up and down.\n"
-				"Flicker - a flame or a failing bulb.  Double flash - two quick flashes, then a pause, like an emergency light.\n"
-				"While the clip plays - and in the export - it follows the clip's own clock, so every playback flashes on the same frames. "
-				"While the clip is paused it flashes in real time, so you see it as you set it up.");
-			if (fm != lights::FX_OFF)
-			{
-				lights::flashFill(L.fx);
-				// a live preview of the beat, on the wall clock
-				const float lv = lights::flashLevel(L.fx, (float)(GetTickCount64() % 3600000ULL) * 0.001f, L.id);
-				ImGui::SameLine();
-				const ImVec2 at = ImGui::GetCursorScreenPos();
-				const float r = ImGui::GetFrameHeight() * 0.35f;
-				const int g = (int)(40 + 215 * lv);
-				ImGui::GetWindowDrawList()->AddCircleFilled(ImVec2(at.x + r + 2.0f, at.y + ImGui::GetFrameHeight() * 0.5f), r, IM_COL32(g, g, (int)(g * 0.8f), 255));
-				ImGui::Dummy(ImVec2(r * 2.0f + 4.0f, ImGui::GetFrameHeight()));
-				tip("The beat, as it will flash.");
-				if (ImGui::DragFloat("Flash speed", &L.fx.rate, 0.02f, 0.05f, 30.0f, "%.2f a second", ImGuiSliderFlags_Logarithmic)) fch = true;
-				tip("How many flashes a second (Flicker: how fast it wavers).");
-				if (ImGui::DragFloat("Flash depth", &L.fx.depth, 0.01f, 0.0f, 1.0f, "%.2f")) fch = true;
-				tip("How far down it goes between flashes: 1 is fully off, 0.5 half as bright, 0 no flashing at all.");
-				if (fm == lights::FX_BLINK)
+				bool fch = false;
+				int fm = (int)(L.fx.mode + 0.5f);
+				if (fm < 0 || fm >= lights::FX_COUNT) fm = 0;
+				ImGui::SetNextItemWidth(160.0f);
+				if (ImGui::BeginCombo("Flash", lights::flashName(fm)))
 				{
-					if (ImGui::DragFloat("On time", &L.fx.duty, 0.01f, 0.05f, 0.95f, "%.2f")) fch = true;
-					tip("The share of each beat the light is on: 0.5 on half the time, 0.1 a short blink.");
+					for (int m = 0; m < lights::FX_COUNT; ++m)
+						if (ImGui::Selectable(lights::flashName(m), m == fm))
+						{
+							if (fm == lights::FX_OFF && m != lights::FX_OFF) lights::flashFill(L.fx);
+							L.fx.mode = (float)m;
+							fm = m;
+							fch = true;
+						}
+					ImGui::EndCombo();
 				}
-				if (ImGui::DragFloat("Flash offset", &L.fx.phase, 0.01f, 0.0f, 1.0f, "%.2f")) fch = true;
-				tip("Where in its beat it starts. Two lights at the same speed with offsets 0 and 0.5 take turns - red and blue, one after the other.");
+				tip("Makes the light flash - it and its flare:\n"
+					"Blink - on, then off.  Strobe - a short hard flash each beat.  Pulse - fades up and down.\n"
+					"Flicker - a flame or a failing bulb.  Double flash - two quick flashes, then a pause, like an emergency light.\n"
+					"While the clip plays - and in the export - it follows the clip's own clock, so every playback flashes on the same frames. "
+					"While the clip is paused it flashes in real time, so you see it as you set it up.");
+				if (fm != lights::FX_OFF)
+				{
+					lights::flashFill(L.fx);
+					// a live preview of the beat, on the wall clock
+					const float lv = lights::flashLevel(L.fx, (float)(GetTickCount64() % 3600000ULL) * 0.001f, L.id);
+					ImGui::SameLine();
+					const ImVec2 at = ImGui::GetCursorScreenPos();
+					const float r = ImGui::GetFrameHeight() * 0.35f;
+					const int g = (int)(40 + 215 * lv);
+					ImGui::GetWindowDrawList()->AddCircleFilled(ImVec2(at.x + r + 2.0f, at.y + ImGui::GetFrameHeight() * 0.5f), r, IM_COL32(g, g, (int)(g * 0.8f), 255));
+					ImGui::Dummy(ImVec2(r * 2.0f + 4.0f, ImGui::GetFrameHeight()));
+					tip("The beat, as it will flash.");
+					if (ImGui::DragFloat("Flash speed", &L.fx.rate, 0.02f, 0.05f, 30.0f, "%.2f a second", ImGuiSliderFlags_Logarithmic)) fch = true;
+					tip("How many flashes a second (Flicker: how fast it wavers).");
+					if (ImGui::DragFloat("Flash depth", &L.fx.depth, 0.01f, 0.0f, 1.0f, "%.2f")) fch = true;
+					tip("How far down it goes between flashes: 1 is fully off, 0.5 half as bright, 0 no flashing at all.");
+					if (fm == lights::FX_BLINK)
+					{
+						if (ImGui::DragFloat("On time", &L.fx.duty, 0.01f, 0.05f, 0.95f, "%.2f")) fch = true;
+						tip("The share of each beat the light is on: 0.5 on half the time, 0.1 a short blink.");
+					}
+					if (ImGui::DragFloat("Flash offset", &L.fx.phase, 0.01f, 0.0f, 1.0f, "%.2f")) fch = true;
+					tip("Where in its beat it starts. Two lights at the same speed with offsets 0 and 0.5 take turns - red and blue, one after the other.");
+				}
+				if (fch) lights::markDirty();
 			}
-			if (fch) lights::markDirty();
-		}
 
-		// --- the lens flare, drawn by EscoFlare through ReShade
-		ImGui::SeparatorText("Flare (lens)");
-		bool fon = L.fl.on > 0.5f;
-		if (ImGui::Checkbox("Lens flare", &fon))
-		{
-			if (fon && L.fl.size <= 0.02f) L.fl = lights::flarePreset(lights::FP_CINEMATIC);
-			L.fl.on = fon ? 1.0f : 0.0f;
-			lights::markDirty();
-		}
-		tip("A lens flare for this light: a glow, an anamorphic streak, a star, ghosts, a halo and a light leak.\nDrawn by EscoFlare through ReShade, before the editor's own menus, so nothing here goes blurry.");
-		if (fon)
-		{
-			lights::flareFill(L.fl);   // a flare from a 3.3 file has none of 3.5's numbers yet
-			if (!lights::g_flareLive)
-				ImGui::TextDisabled("Waiting for ReShade to load EscoFlare.fx - EscoEditor.log says where it went.");
-			for (int p = lights::FP_SOFT; p < lights::FP_COUNT; ++p)
+			// --- the lens flare, drawn by EscoFlare through ReShade
+			ImGui::SeparatorText("Flare (lens)");
+			bool fon = L.fl.on > 0.5f;
+			if (ImGui::Checkbox("Lens flare", &fon))
 			{
-				if (p > lights::FP_SOFT && p != lights::FP_BLUE) ImGui::SameLine();
-				if (ImGui::Button(lights::flareName(p))) { L.fl = lights::flarePreset(p); lights::markDirty(); }
+				if (fon && L.fl.size <= 0.02f) L.fl = lights::flarePreset(lights::FP_CINEMATIC);
+				L.fl.on = fon ? 1.0f : 0.0f;
+				lights::markDirty();
 			}
-			tip("A starting point: it fills in the numbers below, which are all still yours to change.");
-			bool ch = false;
-			if (ImGui::DragFloat("Size", &L.fl.size, 0.01f, 0.2f, 4.0f, "%.2f")) ch = true;
-			tip("How big the whole flare is on screen.");
-			if (ImGui::DragFloat("Brightness", &L.fl.bright, 0.01f, 0.0f, 3.0f, "%.2f")) ch = true;
-			tip("How strong it is. The light's own Intensity counts too, so keying the intensity keys the flare.");
-			if (ImGui::DragFloat("Streak", &L.fl.streak, 0.01f, 0.0f, 2.0f, "%.2f")) ch = true;
-			tip("The anamorphic line across the frame - the streak of a cine lens.");
-			if (ImGui::DragFloat("Star", &L.fl.star, 0.01f, 0.0f, 2.0f, "%.2f")) ch = true;
-			tip("Crossed spikes, the way a stopped-down photo lens draws a bright point.");
-			if (ImGui::DragFloat("Ghosts", &L.fl.ghost, 0.01f, 0.0f, 2.0f, "%.2f")) ch = true;
-			tip("The row of circles marching from the light through the middle of the frame.");
-			if (ImGui::DragFloat("Halo", &L.fl.halo, 0.01f, 0.0f, 2.0f, "%.2f")) ch = true;
-			tip("A ring on the opposite side of the frame's centre.");
-			if (ImGui::DragFloat("Colour fringe", &L.fl.chroma, 0.01f, 0.0f, 1.0f, "%.2f")) ch = true;
-			tip("How far the ghosts and the halo drift from the light's own colour.");
-			if (ImGui::DragFloat("Light leak", &L.fl.leak, 0.01f, 0.0f, 2.0f, "%.2f")) ch = true;
-			tip("Light creeping in from the edge of the frame, strongest when the light is near it or just past it - a film light leak. It shows even when the light itself is off screen.");
+			tip("A lens flare for this light: a glow, an anamorphic streak, a star, ghosts, a halo and a light leak.\nDrawn by EscoFlare through ReShade, before the editor's own menus, so nothing here goes blurry.");
+			if (fon)
+			{
+				lights::flareFill(L.fl);   // a flare from a 3.3 file has none of 3.5's numbers yet
+				if (!lights::g_flareLive)
+					ImGui::TextDisabled("Waiting for ReShade to load EscoFlare.fx - EscoEditor.log says where it went.");
+				for (int p = lights::FP_SOFT; p < lights::FP_COUNT; ++p)
+				{
+					if (p > lights::FP_SOFT && p != lights::FP_BLUE) ImGui::SameLine();
+					if (ImGui::Button(lights::flareName(p))) { L.fl = lights::flarePreset(p); lights::markDirty(); }
+				}
+				tip("A starting point: it fills in the numbers below, which are all still yours to change.");
+				bool ch = false;
+				if (ImGui::DragFloat("Size", &L.fl.size, 0.01f, 0.2f, 4.0f, "%.2f")) ch = true;
+				tip("How big the whole flare is on screen.");
+				if (ImGui::DragFloat("Brightness", &L.fl.bright, 0.01f, 0.0f, 3.0f, "%.2f")) ch = true;
+				tip("How strong it is. The light's own Intensity counts too, so keying the intensity keys the flare.");
+				if (ImGui::DragFloat("Streak", &L.fl.streak, 0.01f, 0.0f, 2.0f, "%.2f")) ch = true;
+				tip("The anamorphic line across the frame - the streak of a cine lens.");
+				if (ImGui::DragFloat("Star", &L.fl.star, 0.01f, 0.0f, 2.0f, "%.2f")) ch = true;
+				tip("Crossed spikes, the way a stopped-down photo lens draws a bright point.");
+				if (ImGui::DragFloat("Ghosts", &L.fl.ghost, 0.01f, 0.0f, 2.0f, "%.2f")) ch = true;
+				tip("The row of circles marching from the light through the middle of the frame.");
+				if (ImGui::DragFloat("Halo", &L.fl.halo, 0.01f, 0.0f, 2.0f, "%.2f")) ch = true;
+				tip("A ring on the opposite side of the frame's centre.");
+				if (ImGui::DragFloat("Colour fringe", &L.fl.chroma, 0.01f, 0.0f, 1.0f, "%.2f")) ch = true;
+				tip("How far the ghosts and the halo drift from the light's own colour.");
+				if (ImGui::DragFloat("Light leak", &L.fl.leak, 0.01f, 0.0f, 2.0f, "%.2f")) ch = true;
+				tip("Light creeping in from the edge of the frame, strongest when the light is near it or just past it - a film light leak. It shows even when the light itself is off screen.");
 
-			// --- the shape of it
-			ImGui::Spacing();
-			if (ImGui::DragFloat("Angle", &L.fl.angle, 0.5f, -90.0f, 90.0f, "%.0f deg")) ch = true;
-			tip("Turns the streak and the star. 0 is a level streak across the frame; real anamorphic lenses sit a degree or two off level.");
-			if (ImGui::DragFloat("Cross streak", &L.fl.cross, 0.01f, 0.0f, 2.0f, "%.2f")) ch = true;
-			tip("A second streak square across the first, for a cross rather than a single line. Needs Streak above.");
-			if (ImGui::DragFloat("Star spikes", &L.fl.spokes, 0.05f, 2.0f, 8.0f, "%.0f")) ch = true;
-			tip("How many spikes the star has - the number of blades in the iris. Needs Star above.");
-			if (ImGui::DragFloat("Ghost count", &L.fl.ghostCount, 0.05f, 1.0f, 6.0f, "%.0f")) ch = true;
-			tip("How many ghost circles march through the middle of the frame. Needs Ghosts above.");
-			if (ImGui::DragFloat("Ghost spacing", &L.fl.ghostSpread, 0.01f, 0.05f, 1.5f, "%.2f")) ch = true;
-			tip("How far apart they sit along the line from the light through the centre. Small = a tight cluster near the middle.");
-			if (ImGui::DragFloat("Halo size", &L.fl.haloSize, 0.005f, 0.02f, 0.8f, "%.3f")) ch = true;
-			tip("The halo ring's radius, as a share of the frame's height. Needs Halo above.");
-			if (ImGui::DragFloat("Squeeze", &L.fl.squeeze, 0.02f, 0.2f, 4.0f, "%.2f")) ch = true;
-			tip("Stretches the core sideways: 1 is a round glow, 2 an oval twice as wide - the bokeh of an anamorphic lens. Follows Angle.");
+				// --- the shape of it
+				ImGui::Spacing();
+				if (ImGui::DragFloat("Angle", &L.fl.angle, 0.5f, -90.0f, 90.0f, "%.0f deg")) ch = true;
+				tip("Turns the streak and the star. 0 is a level streak across the frame; real anamorphic lenses sit a degree or two off level.");
+				if (ImGui::DragFloat("Cross streak", &L.fl.cross, 0.01f, 0.0f, 2.0f, "%.2f")) ch = true;
+				tip("A second streak square across the first, for a cross rather than a single line. Needs Streak above.");
+				if (ImGui::DragFloat("Star spikes", &L.fl.spokes, 0.05f, 2.0f, 8.0f, "%.0f")) ch = true;
+				tip("How many spikes the star has - the number of blades in the iris. Needs Star above.");
+				if (ImGui::DragFloat("Ghost count", &L.fl.ghostCount, 0.05f, 1.0f, 6.0f, "%.0f")) ch = true;
+				tip("How many ghost circles march through the middle of the frame. Needs Ghosts above.");
+				if (ImGui::DragFloat("Ghost spacing", &L.fl.ghostSpread, 0.01f, 0.05f, 1.5f, "%.2f")) ch = true;
+				tip("How far apart they sit along the line from the light through the centre. Small = a tight cluster near the middle.");
+				if (ImGui::DragFloat("Halo size", &L.fl.haloSize, 0.005f, 0.02f, 0.8f, "%.3f")) ch = true;
+				tip("The halo ring's radius, as a share of the frame's height. Needs Halo above.");
+				if (ImGui::DragFloat("Squeeze", &L.fl.squeeze, 0.02f, 0.2f, 4.0f, "%.2f")) ch = true;
+				tip("Stretches the core sideways: 1 is a round glow, 2 an oval twice as wide - the bokeh of an anamorphic lens. Follows Angle.");
 
-			// --- its own colour
-			ImGui::Spacing();
-			if (ImGui::ColorEdit3("Flare colour", L.fl.tint)) ch = true;
-			tip("A colour for the flare itself, whatever the light's colour is. Click the square for the full picker; it only shows as far as Tint below.");
-			if (ImGui::DragFloat("Tint", &L.fl.tintMix, 0.01f, 0.0f, 1.0f, "%.2f")) ch = true;
-			tip("0 keeps the light's own colour, 1 uses the flare colour above, in between mixes them. The classic blue cine streak is a blue flare colour at about 0.7.");
+				// --- its own colour
+				ImGui::Spacing();
+				if (ImGui::ColorEdit3("Flare colour", L.fl.tint)) ch = true;
+				tip("A colour for the flare itself, whatever the light's colour is. Click the square for the full picker; it only shows as far as Tint below.");
+				if (ImGui::DragFloat("Tint", &L.fl.tintMix, 0.01f, 0.0f, 1.0f, "%.2f")) ch = true;
+				tip("0 keeps the light's own colour, 1 uses the flare colour above, in between mixes them. The classic blue cine streak is a blue flare colour at about 0.7.");
 
-			// --- and whether it sits still
-			ImGui::Spacing();
-			if (ImGui::DragFloat("Flicker", &L.fl.flicker, 0.01f, 0.0f, 1.0f, "%.2f")) ch = true;
-			tip("Makes the flare breathe - an arc lamp, a fire, a failing bulb. It follows the clip's own clock, not the wall clock, so the same frame always looks the same and it holds still while you scrub.");
-			if (ImGui::DragFloat("Flicker speed", &L.fl.flickerHz, 0.05f, 0.2f, 30.0f, "%.1f Hz")) ch = true;
-			tip("How fast it breathes. Two lights with the same numbers still flicker out of step.");
-			if (ch) lights::markDirty();
+				// --- and whether it sits still
+				ImGui::Spacing();
+				if (ImGui::DragFloat("Flicker", &L.fl.flicker, 0.01f, 0.0f, 1.0f, "%.2f")) ch = true;
+				tip("Makes the flare breathe - an arc lamp, a fire, a failing bulb. It follows the clip's own clock, not the wall clock, so the same frame always looks the same and it holds still while you scrub.");
+				if (ImGui::DragFloat("Flicker speed", &L.fl.flickerHz, 0.05f, 0.2f, 30.0f, "%.1f Hz")) ch = true;
+				tip("How fast it breathes. Two lights with the same numbers still flicker out of step.");
+				if (ch) lights::markDirty();
+			}
 		}
 
 		if (ImGui::CollapsingHeader("Keyframes", ImGuiTreeNodeFlags_DefaultOpen))
@@ -1619,7 +1794,9 @@ namespace lightui
 		{
 			ImDrawList* dl = ImGui::GetBackgroundDrawList();
 			const bool hover = overView && !g_drag;
-			const uint32_t under = drawMarkers(dl, v, *S, c, mouse, hover && !g_picking);
+			drawScreens(dl, v, *S, c);
+			uint32_t under = drawMarkers(dl, v, *S, c, mouse, hover && !g_picking);
+			if (!under && hover && !g_picking) under = screenUnder(v, *S, c, mouse);
 			if (g_picking)
 			{
 				// a click picks what the selected light follows
@@ -1656,7 +1833,7 @@ namespace lightui
 				{
 					const lights::Light& L = S->l[si];
 					lights::Params W;
-					if (worldOf(L, shownParams(L, c), W)) hot = drawGizmo(dl, v, W, L.type == lights::T_SPOT, mouse, hover);
+					if (worldOf(L, shownParams(L, c), W)) hot = drawGizmo(dl, v, W, L.type != lights::T_POINT, mouse, hover);
 				}
 				// Alt+click throws the light under the cursor (keeping its distance)
 				// and carries on as a screen drag; the wheel pushes it away.

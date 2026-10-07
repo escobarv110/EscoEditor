@@ -1444,12 +1444,166 @@ int main(int argc, char** argv)
         unhookAll();
     }
 
+    // ---- greenscreens (4.25) -------------------------------------------------
+    {
+        namespace lt = lights;
+        const float up[3] = { 0.0f, 0.0f, 1.0f };
+        lt::Params sp = lt::defaultParams(lt::T_SCREEN);
+        CHECK(sp.col[0] == 0.0f && fabsf(sp.col[1] * 255.0f - 177.0f) < 0.01f && fabsf(sp.col[2] * 255.0f - 64.0f) < 0.01f &&
+              sp.intensity == 6.0f && sp.range == 4.0f, "a new screen is chroma green, 6 x 4 m");
+        sp.pos[0] = 0.0f; sp.pos[1] = 10.0f; sp.pos[2] = 0.0f;
+        sp.dir[0] = 0.0f; sp.dir[1] = -1.0f; sp.dir[2] = 0.0f;   // its front faces the camera at the origin
+
+        lt::ScreenGeo g;
+        CHECK(lt::screenGeo(sp, 0, up, g) && g.shape == lt::SH_FLAT && fabsf(g.u[0] - 1.0f) < 1e-5f && fabsf(g.v[2] - 1.0f) < 1e-5f,
+              "a screen's frame: right is the viewer's right, up is up");
+        const float eye[3] = { 0.0f, 0.0f, 1.0f };
+        const float fwd[3] = { 0.0f, 1.0f, 0.0f };
+        float t = 0, ss = 0, qq = 0;
+        CHECK(lt::screenHit(g, eye, fwd, &t, &ss, &qq) && fabsf(t - 10.0f) < 1e-4f && fabsf(ss) < 1e-4f && fabsf(qq - 1.0f) < 1e-4f,
+              "flat: straight ahead hits 10 m away, 1 m up (t %.3f s %.3f q %.3f)", t, ss, qq);
+        const float wide[3] = { 3.5f, 10.0f, 0.0f };
+        CHECK(!lt::screenHit(g, eye, wide, &t, nullptr, nullptr), "flat: past its side edge misses");
+        const float high[3] = { 0.0f, 0.0f, 5.0f };
+        CHECK(!lt::screenHit(g, high, fwd, &t, nullptr, nullptr), "flat: over its top misses");
+        const float back[3] = { 0.0f, -1.0f, 0.0f };
+        CHECK(!lt::screenHit(g, eye, back, &t, nullptr, nullptr), "flat: looking away misses");
+        const float graze[3] = { 1.0f, 0.0f, 0.0f };
+        CHECK(!lt::screenHit(g, eye, graze, &t, nullptr, nullptr), "flat: a ray along its plane misses");
+        const float behind[3] = { 0.0f, 20.0f, 1.0f };
+        CHECK(lt::screenHit(g, behind, back, &t, nullptr, nullptr) && fabsf(t - 10.0f) < 1e-4f, "flat: it shows from behind too");
+        sp.scale = 2.0f;
+        lt::screenGeo(sp, 0, up, g);
+        const float w5[3] = { 5.0f, 10.0f, 0.0f };
+        CHECK(g.width == 12.0f && g.height == 8.0f && lt::screenHit(g, eye, w5, &t, nullptr, nullptr), "Scale sizes it (12 x 8 m at 2 x)");
+        sp.scale = 1.0f;
+
+        // every shape: a point from screenPoint, a ray at it, the same point back
+        const char* names[3] = { "flat", "curved", "cyc" };
+        for (int shape = 0; shape < lt::SH_COUNT; ++shape)
+        {
+            lt::Params q = sp;
+            q.falloff = 90.0f; q.inner = 3.0f; q.outer = 0.8f;
+            lt::screenGeo(q, lt::withShape(0, shape), up, g);
+            float sh, ql;
+            lt::screenSpan(g, &sh, &ql);
+            const float cam[3] = { 0.3f, 0.0f, 1.6f };
+            int good = 0, tried = 0;
+            for (int i = 1; i < 6; ++i)
+                for (int j = 1; j < 6; ++j)
+                {
+                    const float s0 = -sh + 2.0f * sh * i / 6.0f, q0 = ql * j / 6.0f;
+                    float P[3], rd[3];
+                    lt::screenPoint(g, s0, q0, P);
+                    for (int k = 0; k < 3; ++k) rd[k] = P[k] - cam[k];
+                    ++tried;
+                    if (lt::screenHit(g, cam, rd, &t, &ss, &qq) && fabsf(t - 1.0f) < 1e-3f && fabsf(ss - s0) < 2e-3f && fabsf(qq - q0) < 2e-3f) ++good;
+                }
+            CHECK(good == tried, "%s: every point of its surface is hit where it is, with its own surface coordinates (%d of %d)", names[shape], good, tried);
+        }
+
+        {   // a curved screen's ends come forward; a cyc's floor reaches out
+            lt::Params q = sp;
+            q.falloff = 90.0f;
+            lt::screenGeo(q, lt::withShape(0, lt::SH_CURVED), up, g);
+            float P[3], sh, ql;
+            lt::screenSpan(g, &sh, &ql);
+            lt::screenPoint(g, sh, 0.0f, P);
+            CHECK(fabsf(P[0] - 3.0f) < 1e-3f && P[1] < 9.0f && P[1] > 8.5f, "curved: the end of the arc is the width's half out and comes towards the camera (%.2f, %.2f)", P[0], P[1]);
+            q.inner = 3.0f; q.outer = 0.8f;
+            lt::screenGeo(q, lt::withShape(0, lt::SH_CYC), up, g);
+            lt::screenPoint(g, 0.0f, 0.0f, P);
+            CHECK(fabsf(P[1] - 7.0f) < 1e-4f && fabsf(P[2]) < 1e-4f, "cyc: q = 0 is the front edge of the floor, 3 m out");
+            const float down[3] = { 0.0f, 0.0f, -1.0f }, over[3] = { 0.0f, 8.0f, 2.0f };
+            CHECK(lt::screenHit(g, over, down, &t, nullptr, &qq) && fabsf(t - 2.0f) < 1e-4f && fabsf(qq - 1.0f) < 1e-4f, "cyc: straight down onto the floor");
+            q.outer = 9.0f;
+            lt::screenGeo(q, lt::withShape(0, lt::SH_CYC), up, g);
+            CHECK(g.corner <= 3.0f + 1e-6f, "cyc: the corner is never bigger than the floor or the wall");
+        }
+
+        {   // markers
+            lt::Params q = sp;
+            q.volInt = 1.0f; q.volSize = 0.2f;
+            lt::screenGeo(q, lt::withMarks(0, lt::MK_CROSS), up, g);
+            CHECK(lt::onMarker(g, 2.0f, 3.0f) && lt::onMarker(g, 2.09f, 3.0f) && !lt::onMarker(g, 2.09f, 3.09f) && !lt::onMarker(g, 2.5f, 3.5f),
+                  "crosses: on the grid, along the arms, not between them");
+            lt::screenGeo(q, lt::withMarks(0, lt::MK_DOT), up, g);
+            CHECK(lt::onMarker(g, 1.05f, 1.05f) && !lt::onMarker(g, 1.09f, 1.09f), "dots: round");
+            lt::screenGeo(q, 0, up, g);
+            CHECK(!lt::onMarker(g, 0.0f, 0.0f), "markers off: none");
+            const uint32_t f = lt::withMarks(lt::withShape(lt::LF_SHADOWS, lt::SH_CYC), lt::MK_DOT);
+            CHECK(lt::shapeOf(f) == lt::SH_CYC && lt::marksOf(f) == lt::MK_DOT && (f & lt::LF_SHADOWS), "shape and markers sit in the flags beside the others");
+        }
+
+        {   // in the draw list: never a game light, always in camera space
+            lt::Lock lk;
+            lt::clearStore();
+            lt::LightSet* S = lt::findSet("Screens", 0, true);
+            lt::addLight(*S, lt::T_POINT, nullptr);
+            const int si = lt::addLight(*S, lt::T_SCREEN, nullptr);
+            S->l[si].base = sp;
+            lt::LightSet* was = lt::g_cur;
+            lt::g_cur = S;
+            lt::Ctx c = {};
+            c.valid = true;
+            c.cam.pos[2] = 1.0f; c.cam.fwd[1] = 1.0f; c.cam.right[0] = 1.0f; c.cam.up[2] = 1.0f; c.cam.fov = 50.0f;
+            static lt::Draw d;
+            static lt::FlareSet fs;
+            lt::buildDraw(c, d, &fs);
+            CHECK(d.count == 1 && d.it[0].type == lt::T_POINT, "a screen is not handed to the game as a light");
+            CHECK(fs.screens == 1 && fabsf(fs.sc[0].o[1] - 10.0f) < 1e-4f && fabsf(fs.sc[0].o[2] + 1.0f) < 1e-4f && fabsf(fs.sc[0].w[1] + 1.0f) < 1e-4f,
+                  "the shader gets it in camera space (forward 10, 1 below the eye, facing back)");
+            S->l[si].enabled = false;
+            lt::buildDraw(c, d, &fs);
+            CHECK(fs.screens == 0, "a screen switched off is not drawn");
+            S->l[si].enabled = true;
+            for (int i = 0; i < 9; ++i)
+            {
+                const int k = lt::addLight(*S, lt::T_SCREEN, nullptr);
+                S->l[k].base = sp;
+                S->l[k].base.pos[1] = 20.0f + i;   // all further away than the first
+            }
+            lt::buildDraw(c, d, &fs);
+            bool nearKept = false;
+            for (int i = 0; i < fs.screens; ++i) if (fabsf(fs.sc[i].o[1] - 10.0f) < 1e-4f) nearKept = true;
+            CHECK(fs.screens == lt::kMaxScreens && nearKept, "ten screens: the eight nearest are drawn");
+
+            // the file: its own lines, read back as a screen
+            S->count = 2;
+            S->l[si].flags = lt::withMarks(lt::withShape(0, lt::SH_CURVED), lt::MK_CROSS);
+            S->l[si].at.mode = lt::A_CAMERA;
+            lt::insertKey(S->l[si], 0.0f, sp);
+            lt::Params k2 = sp; k2.intensity = 9.0f;
+            lt::insertKey(S->l[si], 1000.0f, k2);
+            const std::string text = lt::serialize();
+            bool clean = text.find("\nscreen ") != std::string::npos && text.find("\nsb ") != std::string::npos &&
+                         text.find("\nsk ") != std::string::npos && text.find("\nsa ") != std::string::npos;
+            // older builds read "light", "a", "b" and "k" lines: a screen must write none
+            const size_t at = text.find("\nscreen ");
+            const size_t next = text.find("\nscope ", at + 1);
+            const std::string mine = text.substr(at, next == std::string::npos ? std::string::npos : next - at);
+            for (const char* tag : { "\nlight ", "\na ", "\nb ", "\nk ", "\nf ", "\nx " }) if (mine.find(tag) != std::string::npos) clean = false;
+            CHECK(clean, "a screen is written as screen / sa / sb / sk lines only, which builds before 4.25 skip");
+            lt::g_cur = was;
+            lt::clearStore();
+            lt::parse(text);
+            lt::LightSet* R = lt::findSet("Screens", 0, false);
+            CHECK(R && R->count == 2 && R->l[0].type == lt::T_POINT && R->l[1].type == lt::T_SCREEN &&
+                  lt::shapeOf(R->l[1].flags) == lt::SH_CURVED && lt::marksOf(R->l[1].flags) == lt::MK_CROSS &&
+                  R->l[1].at.mode == lt::A_CAMERA && R->l[1].nkeys == 2 && R->l[1].keys[1].p.intensity == 9.0f &&
+                  R->l[1].keys[0].p.dir[1] == -1.0f, "a screen, its keys and what it follows survive the file");
+            lt::Params mid = lt::evalLight(R->l[1], 500.0f);
+            CHECK(fabsf(mid.intensity - 7.5f) < 1e-4f, "its width blends between keys like a light's numbers");
+            lt::clearStore();
+        }
+    }
+
     {   // Rockstar Editor Plus is recognised however its file has been renamed
         CHECK(!rePlusLoaded(), "no Rockstar Editor Plus in this process to start with");
         char sysdir[MAX_PATH] = {}, tmpdir[MAX_PATH] = {}, src[MAX_PATH] = {}, dst[MAX_PATH] = {};
         GetSystemDirectoryA(sysdir, sizeof(sysdir));
         GetTempPathA(sizeof(tmpdir), tmpdir);
-        snprintf(src, sizeof(src), "%s\version.dll", sysdir);
+        snprintf(src, sizeof(src), "%s\\version.dll", sysdir);
         snprintf(dst, sizeof(dst), "%sRockstarEditorPlus-Custom-selftest.asi", tmpdir);
         if (CopyFileA(src, dst, FALSE))
         {

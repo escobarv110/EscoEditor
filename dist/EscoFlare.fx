@@ -1,4 +1,4 @@
-// EscoFlare.fx 1.1 - lens flares and a light leak for EscoEditor's lights
+// EscoFlare.fx 1.2 - greenscreens, lens flares and a light leak for EscoEditor's lights
 // =============================================================================
 //  Part of EscoEditor.asi (Rockstar Editor plugin). EscoEditor copies this file
 //  into ReShade's shader folder, registers itself with ReShade as an add-on and
@@ -20,11 +20,17 @@
 //  line through the middle of the frame, a halo opposite it, a flicker, and a
 //  soft leak from the edge the light sits towards.
 //
+//  1.2 (EscoEditor 4.25): greenscreens. Each is a flat, curved or cyc wall
+//  placed in the world; per pixel the view ray is intersected with it, and
+//  where it is nearer than the scene the pixel becomes its colour - unlit, so
+//  it keys the same in any light - with tracking markers if asked for.
+//
 //  MIT licence.
 // =============================================================================
 #include "ReShade.fxh"
 
 #define EE_MAX_FLARES 8
+#define EE_MAX_SCREENS 8
 
 // ---- set by EscoEditor every frame ------------------------------------------
 uniform int EE_FlareCount < hidden = true;
@@ -70,6 +76,27 @@ uniform float EE_FarClip < hidden = true;
 uniform float EE_Time < hidden = true;
 	ui_label = "Clip time"; ui_category = "Set by EscoEditor";
 > = 0.0;
+
+// ---- greenscreens, in camera space (x right, y forward, z up) ---------------
+uniform int EE_ScreenCount < hidden = true;
+	ui_label = "Screens this frame"; ui_category = "Set by EscoEditor";
+> = 0;
+// xyz the middle of its bottom edge          w shape: 0 flat, 1 curved, 2 cyc
+uniform float4 EE_ScrA[EE_MAX_SCREENS] < hidden = true; >;
+// xyz its right                              w width (metres)
+uniform float4 EE_ScrB[EE_MAX_SCREENS] < hidden = true; >;
+// xyz its up                                 w height
+uniform float4 EE_ScrC[EE_MAX_SCREENS] < hidden = true; >;
+// xyz out of its front                       w curve (radians of arc)
+uniform float4 EE_ScrD[EE_MAX_SCREENS] < hidden = true; >;
+// rgb its colour                             w markers: 0 off, 1 crosses, 2 dots
+uniform float4 EE_ScrE[EE_MAX_SCREENS] < hidden = true; >;
+// x floor depth   y corner radius   z marker spacing   w marker size
+uniform float4 EE_ScrF[EE_MAX_SCREENS] < hidden = true; >;
+// tan of half the vertical field of view
+uniform float EE_TanV < hidden = true;
+	ui_label = "Camera tan(fov/2)"; ui_category = "Set by EscoEditor";
+> = 0.5;
 
 static const float2 EE_Taps[5] = { float2(0, 0), float2(5, 0), float2(-5, 0), float2(0, 5), float2(0, -5) };
 
@@ -211,9 +238,131 @@ float3 EE_OneFlare(int i, float2 me, out float3 leakAdd)
 	return f * amp * vis;
 }
 
+// One ray against one screen, in the screen's own frame (a right, b up, c
+// out of the front). The ray starts at the camera: t is the distance along
+// the forward axis, because the ray's forward component is 1. Returns the
+// nearest t (or 1e30) and the surface coordinates there - across, and up
+// (for a cyc unrolled from the floor's front edge) - in metres.
+float EE_ScreenHit(int i, float3 rd, out float2 sq)
+{
+	sq = 0.0;
+	float3 o = EE_ScrA[i].xyz, U = EE_ScrB[i].xyz, V = EE_ScrC[i].xyz, W = EE_ScrD[i].xyz;
+	int shape = (int)(EE_ScrA[i].w + 0.5);
+	float hw = EE_ScrB[i].w * 0.5, H = EE_ScrC[i].w, curve = EE_ScrD[i].w;
+	float depth = EE_ScrF[i].x, r = EE_ScrF[i].y;
+	float3 O = float3(dot(-o, U), dot(-o, V), dot(-o, W));
+	float3 D = float3(dot(rd, U), dot(rd, V), dot(rd, W));
+	float best = 1e30;
+
+	if (shape != 1 && abs(D.z) > 1e-9)
+	{
+		float t = -O.z / D.z;
+		float2 ab = O.xy + D.xy * t;
+		float lo = shape == 2 ? r : 0.0;
+		if (t > 1e-4 && abs(ab.x) <= hw && ab.y >= lo && ab.y <= H)
+		{
+			best = t;
+			sq = float2(ab.x, shape == 2 ? (depth - r) + r * 1.5707963 + (ab.y - r) : ab.y);
+		}
+	}
+	if (shape == 1)
+	{
+		float R = hw / sin(curve * 0.5);
+		float fa = O.x, fc = O.z - R;
+		float A = D.x * D.x + D.z * D.z, B = 2.0 * (fa * D.x + fc * D.z), C = fa * fa + fc * fc - R * R;
+		float disc = B * B - 4.0 * A * C;
+		if (A > 1e-12 && disc >= 0.0)
+		{
+			float sqd = sqrt(disc);
+			[unroll] for (int k = 0; k < 2; ++k)
+			{
+				float t = (-B + (k == 0 ? -sqd : sqd)) / (2.0 * A);
+				float3 p = O + D * t;
+				float ph = atan2(p.x, R - p.z);
+				if (t > 1e-4 && t < best && abs(ph) <= curve * 0.5 + 1e-5 && p.y >= 0.0 && p.y <= H)
+				{
+					best = t;
+					sq = float2(R * ph, p.y);
+				}
+			}
+		}
+	}
+	if (shape == 2)
+	{
+		if (abs(D.y) > 1e-9)
+		{
+			float t = -O.y / D.y;
+			float3 p = O + D * t;
+			if (t > 1e-4 && t < best && abs(p.x) <= hw && p.z >= r && p.z <= depth)
+			{
+				best = t;
+				sq = float2(p.x, depth - p.z);
+			}
+		}
+		if (r > 1e-4)
+		{
+			float fb = O.y - r, fc = O.z - r;
+			float A = D.y * D.y + D.z * D.z, B = 2.0 * (fb * D.y + fc * D.z), C = fb * fb + fc * fc - r * r;
+			float disc = B * B - 4.0 * A * C;
+			if (A > 1e-12 && disc >= 0.0)
+			{
+				float sqd = sqrt(disc);
+				[unroll] for (int k = 0; k < 2; ++k)
+				{
+					float t = (-B + (k == 0 ? -sqd : sqd)) / (2.0 * A);
+					float3 p = O + D * t;
+					if (t > 1e-4 && t < best && abs(p.x) <= hw && p.y <= r + 1e-5 && p.z <= r + 1e-5)
+					{
+						best = t;
+						sq = float2(p.x, (depth - r) + r * atan2(r - p.z, r - p.y));
+					}
+				}
+			}
+		}
+	}
+	return best;
+}
+
+// The tracking marker at surface point sq, if it is on one.
+bool EE_OnMarker(int i, float2 sq)
+{
+	int marks = (int)(EE_ScrE[i].w + 0.5);
+	if (marks == 0) return false;
+	float sp = max(EE_ScrF[i].z, 0.05), size = EE_ScrF[i].w, half = size * 0.5;
+	float2 d = abs(sq - sp * floor(sq / sp + 0.5));
+	if (marks == 2) return dot(d, d) <= half * half;
+	float th = size * 0.12;
+	return (d.x <= half && d.y <= th) || (d.y <= half && d.x <= th);
+}
+
+// The screens over the picture: the nearest one in front of the scene wins.
+// A little in the screen's favour, so a floor laid right on the ground does
+// not flicker with it.
+float3 EE_Screens(float2 uv, float3 base)
+{
+	float tanV = max(EE_TanV, 1e-4);
+	float3 rd = float3((uv.x * 2.0 - 1.0) * tanV * BUFFER_ASPECT_RATIO, 1.0, (1.0 - uv.y * 2.0) * tanV);
+	float scene = EE_Depth(uv);
+	float best = scene * 1.002 + 0.03;
+	float3 col = base;
+	[loop] for (int i = 0; i < EE_MAX_SCREENS; ++i)
+	{
+		if (i >= EE_ScreenCount) break;
+		float2 sq;
+		float t = EE_ScreenHit(i, rd, sq);
+		if (t < best)
+		{
+			best = t;
+			col = EE_OnMarker(i, sq) ? EE_ScrE[i].rgb * 0.55 : EE_ScrE[i].rgb;
+		}
+	}
+	return col;
+}
+
 float3 PS_EE_Flare(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
 {
 	float3 base = tex2D(ReShade::BackBuffer, uv).rgb;
+	if (EE_ScreenCount > 0) base = EE_Screens(uv, base);
 	if (EE_FlareCount <= 0) return base;
 
 	float2 me = (uv - 0.5) * float2(BUFFER_ASPECT_RATIO, 1.0);
@@ -229,7 +378,7 @@ float3 PS_EE_Flare(float4 pos : SV_Position, float2 uv : TEXCOORD) : SV_Target
 
 technique EscoFlare < hidden = true;
 	ui_label = "EscoFlare";
-	ui_tooltip = "Lens flares for EscoEditor's scene lights. EscoEditor draws this itself from the light editor - there is nothing to switch on here.";
+	ui_tooltip = "Greenscreens and lens flares for EscoEditor's scene. EscoEditor draws this itself from the light editor - there is nothing to switch on here.";
 >
 {
 	pass Flare { VertexShader = PostProcessVS; PixelShader = PS_EE_Flare; }

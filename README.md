@@ -4,12 +4,13 @@ A standalone plugin for **GTA V's Rockstar Editor** — the one in FiveM and in
 singleplayer. It adds the things the editor is missing when you are actually
 shooting something: a free camera you can slow right down, keyframes you can
 copy between markers, time of day and weather per clip, and **scene lights you
-place in the picture with a 3D gizmo and key over the clip**.
+place in the picture with a 3D gizmo and key over the clip**, and greenscreens
+that stay put in the world.
 
 No ScriptHookV, no Rockstar Editor+, no Menyoo. One `.asi`, and it runs
 alongside Rockstar Editor+ if you use that too.
 
-<sub>Version 4.24 · GTA V b3258–b3751 and singleplayer b3407 · MIT</sub>
+<sub>Version 4.25 · GTA V b3258–b3751 and singleplayer b3407 · MIT</sub>
 
 ---
 
@@ -54,7 +55,7 @@ alongside Rockstar Editor+ if you use that too.
 
 **Scene lights** — the big one
 
-* Place **point and spot lights** in a clip, with a 3D gizmo in the picture:
+* Place **point and spot lights** (and greenscreens) in a clip, with a 3D gizmo in the picture:
   move, rotate, scale.
 * **Keyframe them** over the clip — colour, intensity, range, falloff, cone,
   volume, position and direction all interpolate between keys.
@@ -72,6 +73,13 @@ alongside Rockstar Editor+ if you use that too.
   in a blackout, and **From the sun** — the engine works the light's colour and
   brightness out from the sun at the clip's hour, so it follows sunrise, noon
   and dusk on its own.
+* **Greenscreens in the world** — flat, curved or cyc (wall, rounded corner
+  and floor), any colour (chroma green and blue one click away), unlit so the
+  colour is the same in any light, with optional tracking markers (crosses or
+  dots). Placed, turned, sized, keyed and attached like a light; people in
+  front stay in front (the depth buffer decides). Drawn by EscoFlare.fx, in
+  playback, Rockstar Editor+ renders and the game's Export that EVE records
+  (`ScreensInExport=1`).
 * **Time of day and weather** per clip, in the light editor or on the menu —
   and **keyed over the clip** like a light if you want: the time runs in
   minutes (taking the short way round midnight) and the weather uses the
@@ -146,7 +154,7 @@ build\selftest\selftest.bat   :: builds the self-test
 build\selftest\selftest.exe            :: a cameras.ymt may be passed, but is not needed
 ```
 
-The self-test is 172 checks over the parts that can run outside the game: the
+The self-test is 251 checks over the parts that can run outside the game: the
 metadata parser, the light record, keyframe interpolation, the light file
 format, the entity pools, the marker clipboard, Free Look's snapshots, MinHook
 itself. It prints `SELFTEST: all checks passed` or the first thing that broke.
@@ -171,7 +179,8 @@ One translation unit — `src/main.cpp` includes the `.inc` files in order:
 | `ecs_director.inc` | the per-frame hook on the replay director |
 | `ecs_worker.inc` | the worker thread |
 
-`dist/EscoFlare.fx` is the flare shader. `tools/escodump` is a small read-only
+`dist/EscoFlare.fx` is the greenscreen and flare shader (built into the
+`.asi` and written to ReShade's shader folder). `tools/escodump` is a small read-only
 plugin that writes a decrypted copy of the game's module out, for working out
 byte patterns on a new build.
 

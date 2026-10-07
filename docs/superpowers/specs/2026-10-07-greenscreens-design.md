@@ -1,6 +1,6 @@
 # Greenscreens in the world - design
 
-Date: 2026-10-07 - EscoEditor 4.25 - status: approved in chat, spec for review
+Date: 2026-10-07 - EscoEditor 4.25 - status: built (see "As built")
 
 ## Goal
 
@@ -141,3 +141,24 @@ check colour under night/day, one RE+ render, one EVE export.
 
 Lighting or shadows on screens, spill or reflections, screens in the game's own
 export without EVE, more than 8 screens.
+
+## As built (4.25)
+
+A screen became a third kind of light (`T_SCREEN`) instead of a separate
+`Screen` struct, so keys, blending, attaching, Duplicate, "Same lights in
+every clip" and the gizmo work for it unchanged. It keeps a light's `Params`:
+width = intensity, height = range, curve = falloff, floor depth = inner,
+corner = outer, marker spacing = volInt, marker size = volSize, colour = col,
+facing = dir, Scale sizes everything. Shape and markers sit in its flags
+(bits 8-9 and 10-11). Differences from the design above:
+
+- No roll: a screen is turned by yaw and pitch of its facing; up is the
+  world's (or what it follows).
+- Markers are a fixed darker shade (0.55 x) of the screen's colour.
+- One list: screens sit in the light list ("screen" beside "spot"/"point"),
+  with an "Add screen" button, not a Lights / Screens switch.
+- File: `screen <id> <on> 0x<flags> <name>`, then `sa` / `sb` / `sk` lines in
+  the light layout - every line starts with "s", which builds before 4.25
+  skip.
+- `ScreensInExport=1` lets the whole EscoFlare pass (screens and flares) draw
+  during the game's Export; EscoFocus stays off then.

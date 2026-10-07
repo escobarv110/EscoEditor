@@ -1,4 +1,4 @@
-EscoEditor.asi 4.24  -  more control for the Rockstar Editor
+EscoEditor.asi 4.25  -  more control for the Rockstar Editor
 ======================================================================
 (formerly EditorCamSpeed.asi - same plugin, new name)
 
@@ -9,6 +9,34 @@ menu, adds scene lights you place in the picture with a 3D gizmo - fixed in
 the world, on the camera, or riding along with a ped, a vehicle or a prop -
 and keeps the free camera speed keys. The editor's own camera path,
 transitions, shake and depth of field are never touched.
+
+WHAT CHANGED IN 4.25
+  - Greenscreens in the world. "Add screen" in the light editor (L) puts a
+    chroma screen 6 m in front of the camera. Unlike a ReShade or ENB
+    greenscreen it is not stuck to the view: it stays where you put it while
+    the camera moves, and people and cars in front of it stay in front.
+      Shape     Flat, Curved (bent round towards the camera, Curve in
+                degrees) or Cyc (a wall and a floor joined by a rounded
+                corner - Floor depth and Corner)
+      Colour    Green (0, 177, 64), Blue (0, 71, 187) or any colour. Not lit
+                by the game: the same in day, night, rain or a dark room
+      Markers   Off, Crosses or Dots, with their spacing and size, in a darker
+                shade of the screen's colour, for tracking a camera move
+      Width, Height, and Scale for all of it at once
+    It moves, turns (W / E / R gizmo, or the numbers), keys over the clip and
+    follows the camera, a ped, a vehicle or a prop exactly like a light.
+    Its outline shows in the light editor; click it to select it.
+    The screen itself is drawn by EscoFlare.fx through ReShade (the plugin
+    installs it), so ReShade with add-on support is needed for it.
+  - In exports: Rockstar Editor+ renders draw it like the playback. The
+    game's own Export (what EVE records) draws the screens and the lens
+    flares again - ScreensInExport=1, new in EscoEditor.ini. If an EVE video
+    comes out black, set ScreensInExport=0 and say so: that is 4.24's
+    behaviour (nothing from ReShade during an Export). The game's Export
+    WITHOUT EVE captures before ReShade and has no screens.
+  - Older builds skip screens in EscoEditor.lights.txt (their lines start
+    with "s"), so going back to 4.24 keeps your lights and drops only the
+    screens.
 
 WHAT CHANGED IN 4.24
   - The light editor's mouse works. Two things stood in the way, both

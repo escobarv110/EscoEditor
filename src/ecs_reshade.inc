@@ -42,10 +42,12 @@ namespace rs
 	constexpr const char* kEffect    = "EscoFlare.fx";
 	constexpr const char* kTechnique = "EscoFlare";
 
-	enum Var { V_COUNT_, V_A, V_B, V_C, V_D, V_E, V_F, V_G, V_NEARCLIP, V_FARCLIP, V_TIME, V_VARS };
+	enum Var { V_COUNT_, V_A, V_B, V_C, V_D, V_E, V_F, V_G, V_NEARCLIP, V_FARCLIP, V_TIME,
+	           V_SCOUNT, V_SA, V_SB, V_SC, V_SD, V_SE, V_SF, V_TANV, V_VARS };
 	const char* const kVarNames[V_VARS] = {
 		"EE_FlareCount", "EE_FlareA", "EE_FlareB", "EE_FlareC", "EE_FlareD", "EE_FlareE", "EE_FlareF", "EE_FlareG",
-		"EE_NearClip", "EE_FarClip", "EE_Time" };
+		"EE_NearClip", "EE_FarClip", "EE_Time",
+		"EE_ScreenCount", "EE_ScrA", "EE_ScrB", "EE_ScrC", "EE_ScrD", "EE_ScrE", "EE_ScrF", "EE_TanV" };
 
 	// --- one frame of back-buffer traffic (pure, so the self-test can run it) --
 	enum { K_DRAW = 0, K_INDEXED, K_INDIRECT, K_COPY };
@@ -283,8 +285,37 @@ namespace rs
 	inline void setf(Entry& e, int v, float x) { e.rt->set_uniform_value_float(e.var[v], &x, 1); }
 	inline void seti(Entry& e, int v, int x)   { const int32_t y = x; e.rt->set_uniform_value_int(e.var[v], &y, 1); }
 
-	// The clip's lights as this runtime sees them. Returns how many flares are
-	// on screen: 0 means there is nothing to draw this frame.
+	// The clip's greenscreens (4.25), already in camera space.
+	int pushScreens(Entry& e, const lights::FlareSet& fs)
+	{
+		constexpr int kN = lights::kMaxScreens;
+		float A[4 * kN] = {}, B[4 * kN] = {}, C[4 * kN] = {}, D[4 * kN] = {}, E[4 * kN] = {}, F[4 * kN] = {};
+		const int n = fs.screens < kN ? (fs.screens > 0 ? fs.screens : 0) : kN;
+		for (int i = 0; i < n; ++i)
+		{
+			const lights::ScreenGeo& g = fs.sc[i];
+			for (int k = 0; k < 3; ++k)
+			{
+				A[i * 4 + k] = g.o[k]; B[i * 4 + k] = g.u[k]; C[i * 4 + k] = g.v[k]; D[i * 4 + k] = g.w[k];
+				E[i * 4 + k] = lights::clampf(g.col[k], 0.0f, 1.0f);
+			}
+			A[i * 4 + 3] = (float)g.shape; B[i * 4 + 3] = g.width; C[i * 4 + 3] = g.height; D[i * 4 + 3] = g.curve;
+			E[i * 4 + 3] = (float)g.marks;
+			F[i * 4 + 0] = g.depth; F[i * 4 + 1] = g.corner; F[i * 4 + 2] = g.spacing; F[i * 4 + 3] = g.msize;
+		}
+		seti(e, V_SCOUNT, n);
+		e.rt->set_uniform_value_float(e.var[V_SA], A, 4 * kN);
+		e.rt->set_uniform_value_float(e.var[V_SB], B, 4 * kN);
+		e.rt->set_uniform_value_float(e.var[V_SC], C, 4 * kN);
+		e.rt->set_uniform_value_float(e.var[V_SD], D, 4 * kN);
+		e.rt->set_uniform_value_float(e.var[V_SE], E, 4 * kN);
+		e.rt->set_uniform_value_float(e.var[V_SF], F, 4 * kN);
+		setf(e, V_TANV, tanf(lights::clampf(fs.fov, 1.0f, 130.0f) * 0.5f * lights::kDeg));
+		return n;
+	}
+
+	// The clip's lights as this runtime sees them. Returns how many flares and
+	// screens are on screen: 0 means there is nothing to draw this frame.
 	int pushValues(Entry& e, const lights::FlareSet& fs)
 	{
 		constexpr int kN = lights::kMaxFlares;
@@ -320,15 +351,27 @@ namespace rs
 		setf(e, V_FARCLIP,  fs.farClip > 50.0f && fs.farClip < 100000.0f ? fs.farClip : 1000.0f);
 		// the clip's clock, wrapped to an hour so a float keeps its precision
 		setf(e, V_TIME, fs.time - 3600.0f * floorf(fs.time / 3600.0f));
-		return n;
+		return n + pushScreens(e, fs);
 	}
 
-	// Does the light editor want flares on screen right now?
+	// Does the clip want flares or screens on screen right now? During the
+	// game's Export only with ScreensInExport=1 (4.25; 4.23 drew nothing then).
+	int g_exportLogs = 0;
+	bool g_exportSaid = false;
 	bool wantNow(lights::FlareSet& F)
 	{
 		F = lights::flares();
 		const ULONGLONG now = GetTickCount64();
-		return editorOpen() && !game::exporting() && F.count > 0 && F.at != 0 && (now - F.at) < 5000;
+		const bool some = (F.count > 0 || F.screens > 0) && F.at != 0 && (now - F.at) < 5000;
+		if (!editorOpen() || !some) return false;
+		if (!game::exporting()) { g_exportSaid = false; return true; }
+		if (!g_exportSaid && g_exportLogs < 8)
+		{
+			g_exportSaid = true; ++g_exportLogs;
+			logf("reshade: the game's Export - %d screen(s) and %d flare(s) %s", F.screens, F.count,
+				g_cfg.screensInExport ? "drawn into it (ScreensInExport=1)" : "left out (ScreensInExport=0)");
+		}
+		return g_cfg.screensInExport;
 	}
 
 	// --- drawing it before the menus ------------------------------------------
@@ -523,7 +566,7 @@ namespace rs
 		if (rt->get_technique_state(e->tech) != fallback) rt->set_technique_state(e->tech, fallback);
 		e->fallbackOn = fallback;
 		if (fallback && pushValues(*e, F) <= 0) { rt->set_technique_state(e->tech, false); e->fallbackOn = false; }
-		else if (!want) seti(*e, V_COUNT_, 0);
+		else if (!want) { seti(*e, V_COUNT_, 0); seti(*e, V_SCOUNT, 0); }
 
 		if (e == m)
 		{

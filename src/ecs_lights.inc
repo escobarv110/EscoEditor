@@ -62,10 +62,31 @@ namespace lights
 	constexpr uint32_t kProjectMontage = 0x320, kMontageName = 0x70, kVtClipIndex = 0x50;
 	constexpr uint32_t kDirNearClip = 0x1E0 + 0x74, kDirFarClip = 0x1E0 + 0x78;   // the director's copy of the rendered frame
 
-	enum { T_POINT = 0, T_SPOT = 1 };
+	enum { T_POINT = 0, T_SPOT = 1, T_SCREEN = 2 };
 	// The light's switches (ours; engineFlags() turns them into the game's).
 	enum : uint32_t { LF_SHADOWS = 1u << 0, LF_HIRES = 1u << 1, LF_VOLUME = 1u << 2, LF_NOSPEC = 1u << 3, LF_BLACKOUT = 1u << 4,
 	                  LF_SUN = 1u << 5 };
+
+	// A greenscreen (4.25) is the third kind. It is never handed to the game
+	// as a light: EscoFlare.fx draws it, flat and unlit, in front of whatever
+	// is behind it. It keeps a light's Params, read as
+	//   pos = the middle of its bottom edge, dir = the way its front faces,
+	//   col = its colour, intensity = width, range = height (metres),
+	//   falloff = Curve (degrees of arc), inner = floor depth and outer = the
+	//   corner's radius (Cyc), volInt = marker spacing, volSize = marker size,
+	//   and Scale sizes all of it -
+	// so keys, blending, attaching and the file work for it unchanged. Its
+	// shape and its markers sit in its flags.
+	enum { SH_FLAT = 0, SH_CURVED = 1, SH_CYC = 2, SH_COUNT };
+	enum { MK_OFF = 0, MK_CROSS = 1, MK_DOT = 2, MK_COUNT };
+	constexpr uint32_t LF_SHAPE_SHIFT = 8, LF_MARK_SHIFT = 10;
+	constexpr int      kMaxScreens = 8;   // drawn at once (the nearest)
+	inline int shapeOf(uint32_t f) { const int v = (int)((f >> LF_SHAPE_SHIFT) & 3u); return v < SH_COUNT ? v : SH_FLAT; }
+	inline int marksOf(uint32_t f) { const int v = (int)((f >> LF_MARK_SHIFT) & 3u); return v < MK_COUNT ? v : MK_OFF; }
+	inline uint32_t withShape(uint32_t f, int v) { return (f & ~(3u << LF_SHAPE_SHIFT)) | (((uint32_t)v & 3u) << LF_SHAPE_SHIFT); }
+	inline uint32_t withMarks(uint32_t f, int v) { return (f & ~(3u << LF_MARK_SHIFT)) | (((uint32_t)v & 3u) << LF_MARK_SHIFT); }
+	inline const char* shapeName(int v) { return v == SH_CURVED ? "Curved" : v == SH_CYC ? "Cyc" : "Flat"; }
+	inline const char* marksName(int v) { return v == MK_CROSS ? "Crosses" : v == MK_DOT ? "Dots" : "Off"; }
 
 	struct Params
 	{
@@ -519,7 +540,184 @@ namespace lights
 		p.volInt    = 1.0f;
 		p.volSize   = 1.0f;
 		p.scale     = 1.0f;
+		if (type == T_SCREEN)
+		{
+			p.dir[1] = 1.0f; p.dir[2] = 0.0f;
+			p.col[0] = 0.0f; p.col[1] = 177.0f / 255.0f; p.col[2] = 64.0f / 255.0f;   // chroma green
+			p.intensity = 6.0f;      // width
+			p.range     = 4.0f;      // height
+			p.falloff   = 60.0f;     // curve
+			p.inner     = 4.0f;      // floor depth
+			p.outer     = 1.0f;      // corner
+			p.volInt    = 1.0f;      // marker spacing
+			p.volSize   = 0.12f;     // marker size
+		}
 		return p;
+	}
+
+	// --- a greenscreen's shape ---------------------------------------------------
+	// Its own frame: u to the right as seen from the front, v up, w out of the
+	// front, o the middle of the bottom edge. In that frame (a, b, c):
+	//   Flat    the plane c = 0, |a| <= width/2, 0 <= b <= height.
+	//   Curved  that rectangle bent round a vertical axis in front of it: an arc
+	//           of `curve` radians whose chord is the width.
+	//   Cyc     a wall (c = 0) and a floor (b = 0) reaching `depth` forward,
+	//           joined by a quarter round of radius `corner` about the line
+	//           b = c = corner.
+	// (s, q) are coordinates on the surface, in metres: s across from the
+	// middle, q up - for a Cyc unrolled from the front edge of the floor, over
+	// the corner and up the wall - so markers keep their spacing round a bend.
+	// The same maths is in EscoFlare.fx; this copy is for picking and the
+	// self-test, and the CPU sends the shader the frame in camera space.
+	struct ScreenGeo
+	{
+		float o[3], u[3], v[3], w[3];
+		int   shape, marks;
+		float width, height, curve, depth, corner, radius;
+		float col[3], spacing, msize;
+	};
+
+	bool screenGeo(const Params& p, uint32_t flags, const float up[3], ScreenGeo& g)
+	{
+		memset(&g, 0, sizeof(g));
+		memcpy(g.o, p.pos, sizeof(g.o));
+		memcpy(g.w, p.dir, sizeof(g.w));
+		if (!norm3(g.w)) return false;
+		cross3(up, g.w, g.u);
+		if (!norm3(g.u))
+		{
+			// facing straight along `up` (a screen laid flat): any right will do
+			const float y[3] = { 0.0f, 1.0f, 0.0f }, x[3] = { 1.0f, 0.0f, 0.0f };
+			cross3(fabsf(g.w[1]) < 0.9f ? y : x, g.w, g.u);
+			if (!norm3(g.u)) return false;
+		}
+		cross3(g.w, g.u, g.v);
+		const float sc = scaleOf(p);
+		g.shape   = shapeOf(flags);
+		g.marks   = marksOf(flags);
+		g.width   = clampf(p.intensity, 0.05f, 500.0f) * sc;
+		g.height  = clampf(p.range, 0.05f, 500.0f) * sc;
+		g.curve   = clampf(p.falloff, 0.0f, 180.0f) * kDeg;
+		g.depth   = clampf(p.inner, 0.0f, 500.0f) * sc;
+		g.corner  = clampf(p.outer, 0.0f, 100.0f) * sc;
+		if (g.corner > g.height) g.corner = g.height;
+		if (g.corner > g.depth)  g.corner = g.depth;
+		if (g.shape == SH_CURVED && g.curve < 0.5f * kDeg) g.shape = SH_FLAT;   // too little bend to tell
+		g.radius  = g.shape == SH_CURVED ? (g.width * 0.5f) / sinf(g.curve * 0.5f) : 0.0f;
+		memcpy(g.col, p.col, sizeof(g.col));
+		g.spacing = clampf(p.volInt, 0.05f, 100.0f) * sc;
+		g.msize   = clampf(p.volSize, 0.005f, 20.0f) * sc;
+		return true;
+	}
+
+	// How far round the surface goes: s runs -sHalf .. sHalf, q 0 .. qLen.
+	void screenSpan(const ScreenGeo& g, float* sHalf, float* qLen)
+	{
+		if (g.shape == SH_CURVED)   { *sHalf = g.radius * g.curve * 0.5f; *qLen = g.height; }
+		else if (g.shape == SH_CYC) { *sHalf = g.width * 0.5f; *qLen = (g.depth - g.corner) + g.corner * 1.5707963f + (g.height - g.corner); }
+		else                        { *sHalf = g.width * 0.5f; *qLen = g.height; }
+	}
+
+	// The point at (s, q) on the surface, in the frame g is in.
+	void screenPoint(const ScreenGeo& g, float s, float q, float out[3])
+	{
+		float a = s, b = q, c = 0.0f;
+		if (g.shape == SH_CURVED)
+		{
+			const float ph = s / g.radius;
+			a = g.radius * sinf(ph); c = g.radius - g.radius * cosf(ph);
+		}
+		else if (g.shape == SH_CYC)
+		{
+			const float r = g.corner, l1 = g.depth - r, l2 = r * 1.5707963f;
+			if (q <= l1)           { b = 0.0f; c = g.depth - q; }
+			else if (q <= l1 + l2) { const float ph = r > 1e-6f ? (q - l1) / r : 0.0f; b = r - r * cosf(ph); c = r - r * sinf(ph); }
+			else                   { b = r + (q - l1 - l2); c = 0.0f; }
+		}
+		for (int i = 0; i < 3; ++i) out[i] = g.o[i] + g.u[i] * a + g.v[i] * b + g.w[i] * c;
+	}
+
+	// Where a ray first meets the surface: the ray's parameter (in lengths of
+	// rd) and the surface coordinates there. Both sides count.
+	bool screenHit(const ScreenGeo& g, const float ro[3], const float rd[3], float* tOut, float* sOut, float* qOut)
+	{
+		const float r0[3] = { ro[0] - g.o[0], ro[1] - g.o[1], ro[2] - g.o[2] };
+		const float O[3] = { dot3(r0, g.u), dot3(r0, g.v), dot3(r0, g.w) };
+		const float D[3] = { dot3(rd, g.u), dot3(rd, g.v), dot3(rd, g.w) };
+		const float hw = g.width * 0.5f;
+		float best = 3.4e38f, bs = 0.0f, bq = 0.0f;
+		auto take = [&](float t, float s, float q) { if (t > 1e-4f && t < best) { best = t; bs = s; bq = q; } };
+
+		// the wall (Flat, and a Cyc's above its corner): c = 0
+		if (g.shape != SH_CURVED && fabsf(D[2]) > 1e-9f)
+		{
+			const float t = -O[2] / D[2], a = O[0] + D[0] * t, b = O[1] + D[1] * t;
+			const float lo = g.shape == SH_CYC ? g.corner : 0.0f;
+			if (fabsf(a) <= hw && b >= lo && b <= g.height)
+				take(t, a, g.shape == SH_CYC ? (g.depth - g.corner) + g.corner * 1.5707963f + (b - g.corner) : b);
+		}
+		if (g.shape == SH_CURVED)
+		{
+			// the cylinder a^2 + (c - R)^2 = R^2, within the arc and the height
+			const float R = g.radius, fa = O[0], fc = O[2] - R;
+			const float A = D[0] * D[0] + D[2] * D[2], B = 2.0f * (fa * D[0] + fc * D[2]), C = fa * fa + fc * fc - R * R;
+			const float disc = B * B - 4.0f * A * C;
+			if (A > 1e-12f && disc >= 0.0f)
+			{
+				const float sq = sqrtf(disc);
+				const float ts[2] = { (-B - sq) / (2.0f * A), (-B + sq) / (2.0f * A) };
+				for (float t : ts)
+				{
+					const float a = O[0] + D[0] * t, b = O[1] + D[1] * t, c = O[2] + D[2] * t;
+					const float ph = atan2f(a, R - c);
+					if (fabsf(ph) <= g.curve * 0.5f + 1e-5f && b >= 0.0f && b <= g.height) take(t, R * ph, b);
+				}
+			}
+		}
+		if (g.shape == SH_CYC)
+		{
+			const float r = g.corner;
+			// the floor: b = 0, from the corner to its front edge
+			if (fabsf(D[1]) > 1e-9f)
+			{
+				const float t = -O[1] / D[1], a = O[0] + D[0] * t, c = O[2] + D[2] * t;
+				if (fabsf(a) <= hw && c >= r && c <= g.depth) take(t, a, g.depth - c);
+			}
+			// the corner: (b - r)^2 + (c - r)^2 = r^2 with b, c <= r
+			if (r > 1e-4f)
+			{
+				const float fb = O[1] - r, fc = O[2] - r;
+				const float A = D[1] * D[1] + D[2] * D[2], B = 2.0f * (fb * D[1] + fc * D[2]), C = fb * fb + fc * fc - r * r;
+				const float disc = B * B - 4.0f * A * C;
+				if (A > 1e-12f && disc >= 0.0f)
+				{
+					const float sq = sqrtf(disc);
+					const float ts[2] = { (-B - sq) / (2.0f * A), (-B + sq) / (2.0f * A) };
+					for (float t : ts)
+					{
+						const float a = O[0] + D[0] * t, b = O[1] + D[1] * t, c = O[2] + D[2] * t;
+						if (fabsf(a) <= hw && b <= r + 1e-5f && c <= r + 1e-5f)
+							take(t, a, (g.depth - r) + r * atan2f(r - c, r - b));
+					}
+				}
+			}
+		}
+		if (best > 3e38f) return false;
+		*tOut = best;
+		if (sOut) *sOut = bs;
+		if (qOut) *qOut = bq;
+		return true;
+	}
+
+	// Is (s, q) on one of the screen's tracking markers?
+	bool onMarker(const ScreenGeo& g, float s, float q)
+	{
+		if (g.marks == MK_OFF) return false;
+		const float sp = g.spacing, half = g.msize * 0.5f;
+		const float ds = fabsf(s - sp * floorf(s / sp + 0.5f)), dq = fabsf(q - sp * floorf(q / sp + 0.5f));
+		if (g.marks == MK_DOT) return ds * ds + dq * dq <= half * half;
+		const float th = g.msize * 0.12f;
+		return (ds <= half && dq <= th) || (dq <= half && ds <= th);
 	}
 
 	Params blend(const Params& a, const Params& b, float t)
@@ -927,11 +1125,21 @@ namespace lights
 		memset(&L, 0, sizeof(L));
 		if (s.nextId == 0) s.nextId = 1;
 		L.id = s.nextId++;
-		snprintf(L.name, sizeof(L.name), "%s %u", type == T_SPOT ? "Spot" : "Light", L.id);
+		snprintf(L.name, sizeof(L.name), "%s %u", type == T_SPOT ? "Spot" : type == T_SCREEN ? "Screen" : "Light", L.id);
 		L.enabled = true;
-		L.type = type == T_SPOT ? T_SPOT : T_POINT;
+		L.type = type == T_SPOT ? T_SPOT : type == T_SCREEN ? T_SCREEN : T_POINT;
 		L.base = defaultParams(L.type);
-		if (cam)
+		if (cam && L.type == T_SCREEN)
+		{
+			// 6 m ahead, its bottom edge a person's height below the camera,
+			// facing back at it
+			float f[3] = { cam->fwd[0], cam->fwd[1], 0.0f };
+			if (!norm3(f)) { f[0] = 0.0f; f[1] = 1.0f; }
+			for (int i = 0; i < 3; ++i) L.base.pos[i] = cam->pos[i] + f[i] * 6.0f;
+			L.base.pos[2] -= 1.6f;
+			for (int i = 0; i < 3; ++i) L.base.dir[i] = -f[i];
+		}
+		else if (cam)
 		{
 			const float ahead = L.type == T_SPOT ? 1.5f : 3.0f;
 			for (int i = 0; i < 3; ++i) L.base.pos[i] = cam->pos[i] + cam->fwd[i] * ahead;
@@ -1053,7 +1261,11 @@ namespace lights
 		float cs[3], dist, col[3], bright, size, streak, star, ghost, halo, chroma, leak;
 		float tint[3], tintMix, angle, cross, spokes, gcount, gspread, halosize, squeeze, flicker, flickerHz, phase;
 	};
-	struct FlareSet { int count; ULONGLONG at; float fov, nearClip, farClip, time; FlareSrc it[kMaxFlares]; };
+	struct FlareSet
+	{
+		int count; ULONGLONG at; float fov, nearClip, farClip, time; FlareSrc it[kMaxFlares];
+		int screens; ScreenGeo sc[kMaxScreens];   // the clip's greenscreens, in camera space
+	};
 	FlareSet g_flares = {}; volatile LONG g_flareSeq = 0;
 	bool g_flareLive = false;   // ReShade has EscoFlare.fx loaded (ecs_reshade.inc)
 
@@ -1140,6 +1352,47 @@ namespace lights
 		// a phase of its own from the light's id, so two lights never flicker in step
 		s.phase     = (float)((L.id * 2654435761u >> 16) & 0xFFFFu) * (6.2831853f / 65535.0f);
 		return true;
+	}
+
+	// A frame given in the world, as the camera sees it (right, forward, up).
+	void screenToCam(const ScreenGeo& g, const Cam& cam, ScreenGeo& o)
+	{
+		o = g;
+		const float rel[3] = { g.o[0] - cam.pos[0], g.o[1] - cam.pos[1], g.o[2] - cam.pos[2] };
+		const float* in[4] = { rel, g.u, g.v, g.w };
+		float* out[4] = { o.o, o.u, o.v, o.w };
+		for (int k = 0; k < 4; ++k)
+		{
+			const float x = dot3(in[k], cam.right), y = dot3(in[k], cam.fwd), z = dot3(in[k], cam.up);
+			out[k][0] = x; out[k][1] = y; out[k][2] = z;
+		}
+	}
+
+	// A screen's frame in the world: up is the world's, or what it follows.
+	bool screenWorld(const Light& L, const Params& w, ScreenGeo& g)
+	{
+		static const float kUp[3] = { 0.0f, 0.0f, 1.0f };
+		const bool framed = L.at.mode != A_NONE && (L.parentOk || L.frameKnown);
+		return screenGeo(w, L.flags, framed ? L.parent.c : kUp, g);
+	}
+
+	// One more screen for this frame: the nearest kMaxScreens are kept.
+	void addScreen(FlareSet& fs, const Light& L, const Params& w, const Cam& cam)
+	{
+		ScreenGeo g, cs;
+		if (!screenWorld(L, w, g)) return;
+		screenToCam(g, cam, cs);
+		const float d2 = dot3(cs.o, cs.o);
+		int at = fs.screens;
+		if (at >= kMaxScreens)
+		{
+			at = -1;
+			float far2 = d2;
+			for (int i = 0; i < kMaxScreens; ++i) { const float e2 = dot3(fs.sc[i].o, fs.sc[i].o); if (e2 > far2) { far2 = e2; at = i; } }
+			if (at < 0) return;
+		}
+		else ++fs.screens;
+		fs.sc[at] = cs;
 	}
 
 	// --- what a light can follow: the camera, or an entity of the scene -----------
@@ -1683,6 +1936,7 @@ namespace lights
 			fs->nearClip = c.cam.nearClip;
 			fs->farClip = c.cam.farClip;
 			fs->time = c.now * 0.001f;   // the clip's own clock: a flicker falls on the same frame every playback
+			fs->screens = 0;
 		}
 		Lock lk;
 		if (!g_cur) return;
@@ -1701,6 +1955,12 @@ namespace lights
 				if (!L.parentOk && !L.frameKnown) continue;   // never seen it at all
 				if (!L.parentOk) InterlockedIncrement(&g_heldCount);
 				p = toWorld(L.parent, p);
+			}
+			if (L.type == T_SCREEN)
+			{
+				// drawn by EscoFlare.fx, not by the game
+				if (fs && c.valid) addScreen(*fs, L, p, c.cam);
+				continue;
 			}
 			if (L.fx.mode > 0.5f)
 			{
@@ -1940,12 +2200,22 @@ namespace lights
 				char nm[sizeof(L.name)];
 				strcpy_s(nm, L.name);
 				for (char* c = nm; *c; ++c) if (*c == '\r' || *c == '\n') *c = ' ';
-				snprintf(b, sizeof(b), "light %u %d %d 0x%X %s\n", L.id, L.enabled ? 1 : 0, L.type, L.flags, nm);
+				// A screen's lines all start with "s" ("screen", "sa", "sb", "sk"):
+				// builds before 4.25 skip every one, rather than reading it as a light.
+				const bool scr = L.type == T_SCREEN;
+				if (scr) snprintf(b, sizeof(b), "screen %u %d 0x%X %s\n", L.id, L.enabled ? 1 : 0, L.flags, nm);
+				else     snprintf(b, sizeof(b), "light %u %d %d 0x%X %s\n", L.id, L.enabled ? 1 : 0, L.type, L.flags, nm);
 				o += b;
 				if (L.at.mode != A_NONE)
 				{
-					snprintf(b, sizeof(b), "a %d %d 0x%08X %.9g %.9g %.9g\n", L.at.mode, L.at.kind, L.at.model, L.at.last[0], L.at.last[1], L.at.last[2]);
+					snprintf(b, sizeof(b), "%sa %d %d 0x%08X %.9g %.9g %.9g\n", scr ? "s" : "", L.at.mode, L.at.kind, L.at.model, L.at.last[0], L.at.last[1], L.at.last[2]);
 					o += b;
+				}
+				if (scr)
+				{
+					appendParams(o, "sb", nullptr, L.base);
+					for (int k = 0; k < L.nkeys; ++k) appendParams(o, "sk", &L.keys[k].t, L.keys[k].p);
+					continue;
 				}
 				if (L.fl.on > 0.5f)
 				{
@@ -2103,6 +2373,28 @@ namespace lights
 				++lights;
 				continue;
 			}
+			if (!strncmp(s, "screen ", 7))   // 4.25
+			{
+				L = nullptr;
+				if (!set || set->count >= kMaxLights) continue;
+				unsigned id = 0, flags = 0;
+				int on = 1, used = 0;
+				if (sscanf_s(s + 7, "%u %d %x %n", &id, &on, &flags, &used) < 3) continue;
+				L = &set->l[set->count++];
+				memset(L, 0, sizeof(*L));
+				L->id = id ? id : set->nextId;
+				L->enabled = on != 0;
+				L->type = T_SCREEN;
+				L->flags = flags;
+				strncpy_s(L->name, s + 7 + used, _TRUNCATE);
+				L->base = defaultParams(T_SCREEN);
+				if (L->id >= set->nextId) set->nextId = L->id + 1;
+				++lights;
+				continue;
+			}
+			// a screen's "sa", "sb", "sk" read as a light's "a", "b", "k"
+			if (L && L->type == T_SCREEN && s[0] == 's' && (s[1] == 'a' || s[1] == 'b' || s[1] == 'k') && s[2] == ' ') ++s;
+			else if (L && L->type == T_SCREEN && (s[0] == 'a' || s[0] == 'b' || s[0] == 'k') && s[1] == ' ') continue;
 			if (L && s[0] == 'a' && s[1] == ' ')
 			{
 				int mode = 0, kind = 0;
